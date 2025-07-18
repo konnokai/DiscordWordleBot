@@ -27,7 +27,7 @@ public sealed class RedisConnection
         var options = ConfigurationOptions.Parse(_settingOption);
         ConnectionMultiplexer = ConnectionMultiplexer.Connect(options);
 
-        RedisDb = ConnectionMultiplexer.GetDatabase(2);
+        RedisDb = ConnectionMultiplexer.GetDatabase(0);
         RedisServer = ConnectionMultiplexer.GetServer(options.EndPoints.First());
     }
 
