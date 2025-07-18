@@ -2,16 +2,16 @@
 
 namespace DiscordWordleBot.DataBase
 {
-    class SupportContext : DbContext
+    class MainDbContext : DbContext
     {
         public DbSet<GuildConfig> GuildConfig { get; set; }
 
         protected override void OnConfiguring(DbContextOptionsBuilder options)
             => options.UseSqlite($"Data Source={Program.GetDataFilePath("DataBase.db")}");
 
-        public static SupportContext GetDbContext()
+        public static MainDbContext GetDbContext()
         {
-            var context = new SupportContext();
+            var context = new MainDbContext();
             context.Database.SetCommandTimeout(60);
             var conn = context.Database.GetDbConnection();
             conn.Open();

@@ -39,13 +39,13 @@ namespace DiscordWordleBot
             if (!Directory.Exists(Path.GetDirectoryName(GetDataFilePath(""))))
                 Directory.CreateDirectory(Path.GetDirectoryName(GetDataFilePath("")));
 
-            using (var db = new SupportContext())
-            {
-                if (!File.Exists(GetDataFilePath("DataBase.db")))
-                {
-                    db.Database.EnsureCreated();
-                }
-            }
+            //using (var db = new SupportContext())
+            //{
+            //    if (!File.Exists(GetDataFilePath("DataBase.db")))
+            //    {
+            //        db.Database.EnsureCreated();
+            //    }
+            //}
 
             try
             {
