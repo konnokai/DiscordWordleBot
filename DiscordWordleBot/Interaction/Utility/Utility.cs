@@ -21,7 +21,7 @@ namespace DiscordWordleBot.Interaction.Utility
         [SlashCommand("invite", "取得邀請連結")]
         public async Task InviteAsync()
         {
-            await Context.Interaction.SendConfirmAsync("<https://discordapp.com/api/oauth2/authorize?client_id=" + _client.CurrentUser.Id + "&permissions=268774467&scope=bot%20applications.commands>", ephemeral: true);
+            await Context.Interaction.SendConfirmAsync("<https://discordapp.com/api/oauth2/authorize?client_id=" + _client.CurrentUser.Id + "&permissions=313408&scope=bot%20applications.commands>", ephemeral: true);
         }
 
         [SlashCommand("status", "顯示機器人目前的狀態")]
@@ -34,8 +34,8 @@ namespace DiscordWordleBot.Interaction.Utility
 #endif
 
             embedBuilder.WithDescription($"建置版本 {Program.VERSION}");
-            embedBuilder.AddField("作者", "孤之界#1121", true);
-            embedBuilder.AddField("擁有者", $"{Program.ApplicatonOwner.Username}#{Program.ApplicatonOwner.Discriminator}", true);
+            embedBuilder.AddField("作者", "孤之界 (konnokai)", true);
+            embedBuilder.AddField("擁有者", $"{Program.ApplicatonOwner.Username}", true);
             embedBuilder.AddField("狀態", $"伺服器 {_client.Guilds.Count}\n服務成員數 {_client.Guilds.Sum((x) => x.MemberCount)}", false);
             embedBuilder.AddField("上線時間", $"{Program.StopWatch.Elapsed:d\\天\\ hh\\:mm\\:ss}", false);
 

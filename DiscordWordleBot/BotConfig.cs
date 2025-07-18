@@ -7,13 +7,6 @@ public class BotConfig
     public string RedisOption { get; set; } = "127.0.0.1:6379,syncTimeout=3000";
 
     [NotRequirement]
-    public string TwitterClientKey { get; set; } = default;
-    [NotRequirement]
-    public string TwitterClientSecret { get; set; } = default;
-    [NotRequirement]
-    public string TwitterClientBearerToken { get; set; } = default;
-
-    [NotRequirement]
     public ulong TestSlashCommandGuildId { get; set; } = 0;
 
     [NotRequirement]
@@ -68,27 +61,8 @@ public class BotConfig
                     Environment.Exit(3);
                 }
 
-                //if (string.IsNullOrWhiteSpace(config.TwitterClientKey))
-                //{
-                //    Log.Error("TwitterClientKey遺失，請輸入至bot_config.json後重開Bot");
-                //    if (!Console.IsInputRedirected)
-                //        Console.ReadKey();
-                //    Environment.Exit(3);
-                //}
-
-                //if (string.IsNullOrWhiteSpace(config.TwitterClientSecret))
-                //{
-                //    Log.Error("TwitterClientSecret遺失，請輸入至bot_config.json後重開Bot");
-                //    if (!Console.IsInputRedirected)
-                //        Console.ReadKey();
-                //    Environment.Exit(3);
-                //}
-
                 DiscordToken = config.DiscordToken;
                 WebHookUrl = config.WebHookUrl;
-                TwitterClientKey = config.TwitterClientKey;
-                TwitterClientSecret = config.TwitterClientSecret;
-                TwitterClientBearerToken = config.TwitterClientBearerToken;
                 TestSlashCommandGuildId = config.TestSlashCommandGuildId;
                 RedisOption = config.RedisOption;
                 UptimeKumaPushUrl = config.UptimeKumaPushUrl;
