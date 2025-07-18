@@ -13,6 +13,7 @@ namespace DiscordWordleBot.Interaction.Wordle
     {
         public string Answer { get; set; } = "";
         public List<string> Guesses { get; set; } = new();
+        public bool HintUsed { get; set; } = false;
     }
 
     [Group("wordle", "Wordle 遊戲")]
@@ -196,6 +197,41 @@ namespace DiscordWordleBot.Interaction.Wordle
             using var ms = new MemoryStream();
             image.SaveAsPng(ms);
             return ms.ToArray();
+        }
+
+        [SlashCommand("hint", "取得提示")]
+        public async Task HintAsync()
+        {
+            var userId = Context.User.Id;
+            var sessionJson = await _redis.StringGetAsync($"wordle:{userId}");
+            if (sessionJson.IsNullOrEmpty)
+            {
+                await Context.Interaction.SendErrorAsync("你還沒開始遊戲，請先輸入 `/wordle start`。");
+                return;
+            }
+
+            var session = JsonConvert.DeserializeObject<WordleSession>(sessionJson!);
+            if (session.HintUsed)
+            {
+                await Context.Interaction.SendErrorAsync("本局遊戲只能使用一次提示。");
+                return;
+            }
+
+            var answer = session.Answer;
+            var guessedLetters = new HashSet<char>(session.Guesses.SelectMany(x => x));
+            var unguessed = answer.Where(c => !guessedLetters.Contains(c)).Distinct().ToList();
+            if (unguessed.Count == 0)
+            {
+                await Context.Interaction.SendConfirmAsync("你已經猜過所有答案中的字母了！", ephemeral: true);
+                session.HintUsed = true;
+                await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session));
+                return;
+            }
+            var random = new Random();
+            var hintChar = unguessed[random.Next(unguessed.Count)];
+            session.HintUsed = true;
+            await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session));
+            await Context.Interaction.SendConfirmAsync($"提示：答案包含字母 {hintChar.ToString().ToUpper()} (不保證位置)", ephemeral: true);
         }
     }
 }
