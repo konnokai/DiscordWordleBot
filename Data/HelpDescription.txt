@@ -1,0 +1,8 @@
+﻿由 <@284989733229297664>(孤之界#1121) 製作，協助雜項事項的機器人
+
+目前可幫忙統計訊息發言量，表情使用量
+以及些微的協助管理功能(詳細請輸入`!!!cmds Administration`查看)
+
+[點此邀請BOT到新伺服器](https://discordapp.com/api/oauth2/authorize?client_id=682268873185034253&permissions=268774467&scope=bot%20applications.commands)
+
+有新功能想加入或任何建議可以到推特私訊 [孤之界(@Jun112561)](https://twitter.com/Jun112561) 討論

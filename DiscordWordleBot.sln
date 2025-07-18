@@ -1,0 +1,33 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.1.32414.318
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DiscordWordleBot", "DiscordWordleBot\DiscordWordleBot.csproj", "{48E169B7-1A4D-40B7-9988-51BDB2858613}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{B5C9BD9D-9E9F-489E-BC73-62427C41E688}"
+	ProjectSection(SolutionItems) = preProject
+		.editorconfig = .editorconfig
+		.env_sample = .env_sample
+		Dockerfile = Dockerfile
+		docker-compose.yml = docker-compose.yml
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{48E169B7-1A4D-40B7-9988-51BDB2858613}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{48E169B7-1A4D-40B7-9988-51BDB2858613}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{48E169B7-1A4D-40B7-9988-51BDB2858613}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{48E169B7-1A4D-40B7-9988-51BDB2858613}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {7CB157E0-5223-4F96-A819-10A91773FF75}
+	EndGlobalSection
+EndGlobal
