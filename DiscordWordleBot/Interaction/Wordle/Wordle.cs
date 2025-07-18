@@ -1,26 +1,23 @@
 ﻿using Discord.Interactions;
+using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
-using SixLabors.Fonts;
 using StackExchange.Redis;
-using System.Diagnostics;
 
 namespace DiscordWordleBot.Interaction.Wordle
 {
     public class WordleSession
     {
-        public string Answer { get; set; } = "";
         public List<string> Guesses { get; set; } = new();
         public bool HintUsed { get; set; } = false;
     }
 
     [Group("wordle", "Wordle 遊戲")]
-    public class Wordle : TopLevelModule
+    public class Wordle : TopLevelModule<WordleService>
     {
         private readonly DiscordSocketClient _client;
-        private readonly List<string> _answers;
         private readonly IDatabase _redis;
         private const int MaxGuesses = 6;
         private static readonly SixLabors.ImageSharp.Color Green = SixLabors.ImageSharp.Color.ParseHex("6aaa64");
@@ -32,46 +29,14 @@ namespace DiscordWordleBot.Interaction.Wordle
         public Wordle(DiscordSocketClient client)
         {
             _client = client;
-            _answers = LoadAnswers();
             _redis = RedisConnection.RedisDb;
-
-            if (_answers.Count == 0)
-            {
-                Log.Error("Wordle 答案為空，請檢查 WordleAnswers.txt 資料的正確性");
-            }
         }
 
-        private static List<string> LoadAnswers()
+        private static TimeSpan GetExpireTimeSpan()
         {
-            if (!File.Exists(Program.GetDataFilePath("WordleAnswers.txt"))) return [];
-
-            return [.. File.ReadAllLines(Program.GetDataFilePath("WordleAnswers.txt"))
-                .Select(x => x.Trim().ToLowerInvariant())
-                .Where(x => x.Length == 5)
-                .Distinct()];
-        }
-
-        [SlashCommand("start", "開始一局 Wordle 遊戲")]
-        public async Task StartAsync()
-        {
-            try
-            {
-                var random = new Random();
-                var answer = _answers[random.Next(_answers.Count)];
-                var userId = Context.User.Id;
-                var session = new WordleSession { Answer = answer };
-
-                Log.Info($"{Context.Guild.Id} - {Context.User.Id} 開始 Wordle: {answer}");
-
-                await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session));
-
-                await Context.Interaction.SendConfirmAsync($"Wordle 遊戲開始！請輸入 `/wordle guess <五字英文>` 來猜答案。你有 {MaxGuesses} 次機會。", false, true);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex.Demystify(), $"{Context.Guild.Id} - {Context.User.Id} 開始 Wordle 失敗");
-                await Context.Interaction.SendErrorAsync($"開始遊戲失敗");
-            }
+            var now = DateTime.Now;
+            var tomorrow = now.Date.AddDays(1);
+            return tomorrow - now;
         }
 
         [SlashCommand("guess", "猜一個五字英文單字")]
@@ -84,7 +49,7 @@ namespace DiscordWordleBot.Interaction.Wordle
                 return;
             }
 
-            if (!_answers.Contains(word))
+            if (!_service.GetAnswers().Contains(word))
             {
                 await Context.Interaction.SendErrorAsync("不是合法的 Wordle 單字。");
                 return;
@@ -92,35 +57,47 @@ namespace DiscordWordleBot.Interaction.Wordle
 
             var userId = Context.User.Id;
             var sessionJson = await _redis.StringGetAsync($"wordle:{userId}");
-            if (sessionJson.IsNullOrEmpty)
+            var answer = _service.GetDailyAnswer();
+            if (string.IsNullOrEmpty(answer))
             {
-                await Context.Interaction.SendErrorAsync("你還沒開始遊戲，請先輸入 `/wordle start`。");
+                await Context.Interaction.SendErrorAsync("今日 Wordle 答案尚未設定，請稍後再試。");
                 return;
             }
 
-            var session = JsonConvert.DeserializeObject<WordleSession>(sessionJson!);
-            if (session.Guesses.Count >= MaxGuesses)
+            WordleSession session;
+            if (sessionJson.IsNullOrEmpty)
             {
-                await Context.Interaction.SendErrorAsync($"你已經猜了 {MaxGuesses} 次，遊戲結束！正確答案是：{session.Answer}");
-                return;
+                // 自動建立新 session 並設置過期時間
+                session = new WordleSession { Guesses = new List<string>(), HintUsed = false };
+                await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session), GetExpireTimeSpan());
+                //await Context.Interaction.SendConfirmAsync($"Wordle 遊戲開始！你有 {MaxGuesses} 次機會。", false, true);
+            }
+            else
+            {
+                session = JsonConvert.DeserializeObject<WordleSession>(sessionJson!);
+                // 若已猜完（答對或次數已滿）則提示今日已遊玩過
+                if (session.Guesses.Contains(answer) || session.Guesses.Count >= MaxGuesses)
+                {
+                    await Context.Interaction.SendErrorAsync($"你今天已經玩過了！正確答案是：{answer}");
+                    return;
+                }
             }
 
             session.Guesses.Add(word);
-            await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session));
+            await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session), GetExpireTimeSpan());
 
-            var finished = word == session.Answer || session.Guesses.Count >= MaxGuesses;
-
+            var finished = word == answer || session.Guesses.Count >= MaxGuesses;
             bool isDone;
             string resultMessage;
-            if (word == session.Answer)
+            if (word == answer)
             {
                 isDone = true;
-                resultMessage = $"恭喜你答對了！正確答案是：{session.Answer}";
+                resultMessage = $"恭喜你答對了！正確答案是：{answer}";
             }
             else if (finished)
             {
                 isDone = true;
-                resultMessage = $"你已經猜了 {MaxGuesses} 次，遊戲結束！正確答案是：{session.Answer}";
+                resultMessage = $"你已經猜了 {MaxGuesses} 次，遊戲結束！正確答案是：{answer}";
             }
             else
             {
@@ -128,9 +105,8 @@ namespace DiscordWordleBot.Interaction.Wordle
                 resultMessage = $"你還有 {MaxGuesses - session.Guesses.Count} 次機會。";
             }
 
-            var imageBytes = DrawWordleImage(session.Guesses, session.Answer);
+            var imageBytes = DrawWordleImage(session.Guesses, answer);
             using var memoryStream = new MemoryStream(imageBytes);
-
             var embed = new EmbedBuilder()
                 .WithColor(finished ? Discord.Color.Green : Discord.Color.Orange)
                 .WithTitle("Wordle 遊戲")
@@ -142,10 +118,10 @@ namespace DiscordWordleBot.Interaction.Wordle
 
             if (isDone)
             {
-                var imageBytes2 = DrawWordleImage(session.Guesses, session.Answer, false);
+                var imageBytes2 = DrawWordleImage(session.Guesses, answer, false);
                 using var memoryStream2 = new MemoryStream(imageBytes2);
 
-                await _redis.KeyDeleteAsync($"wordle:{userId}");
+                // 不刪除 Redis Key，讓使用者今日無法再玩
 
                 var embed2 = new EmbedBuilder()
                     .WithColor(finished ? Discord.Color.Green : Discord.Color.Orange)
@@ -206,31 +182,38 @@ namespace DiscordWordleBot.Interaction.Wordle
             var sessionJson = await _redis.StringGetAsync($"wordle:{userId}");
             if (sessionJson.IsNullOrEmpty)
             {
-                await Context.Interaction.SendErrorAsync("你還沒開始遊戲，請先輸入 `/wordle start`。");
+                await Context.Interaction.SendErrorAsync("你還沒開始遊戲，請先使用 `/wordle guess`。");
                 return;
             }
 
             var session = JsonConvert.DeserializeObject<WordleSession>(sessionJson!);
+            var answer = _service.GetDailyAnswer();
+            if (string.IsNullOrEmpty(answer))
+            {
+                await Context.Interaction.SendErrorAsync("今日 Wordle 答案尚未設定，請稍後再試。");
+                return;
+            }
+
             if (session.HintUsed)
             {
                 await Context.Interaction.SendErrorAsync("本局遊戲只能使用一次提示。");
                 return;
             }
 
-            var answer = session.Answer;
             var guessedLetters = new HashSet<char>(session.Guesses.SelectMany(x => x));
             var unguessed = answer.Where(c => !guessedLetters.Contains(c)).Distinct().ToList();
             if (unguessed.Count == 0)
             {
                 await Context.Interaction.SendConfirmAsync("你已經猜過所有答案中的字母了！", ephemeral: true);
                 session.HintUsed = true;
-                await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session));
+                await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session), GetExpireTimeSpan());
                 return;
             }
+
             var random = new Random();
             var hintChar = unguessed[random.Next(unguessed.Count)];
             session.HintUsed = true;
-            await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session));
+            await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session), GetExpireTimeSpan());
             await Context.Interaction.SendConfirmAsync($"提示：答案包含字母 {hintChar.ToString().ToUpper()} (不保證位置)", ephemeral: true);
         }
     }
