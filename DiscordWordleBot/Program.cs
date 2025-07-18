@@ -100,7 +100,7 @@ namespace DiscordWordleBot
                     AutoServiceScopes = true,
                     UseCompiledLambda = true,
                     EnableAutocompleteHandlers = true,
-                    DefaultRunMode = Discord.Interactions.RunMode.Async
+                    DefaultRunMode = RunMode.Async
                 }));
 
             interactionServices.LoadInteractionFrom(Assembly.GetAssembly(typeof(InteractionHandler)));
@@ -115,6 +115,8 @@ namespace DiscordWordleBot
 
             Client.Ready += async () =>
             {
+                Log.Info($"已透過 {Client.CurrentUser.Username} 身分登入");
+
                 timerUpdateStatus.Change(0, 20 * 60 * 1000);
 
                 UptimeKumaClient.Init(_botConfig.UptimeKumaPushUrl, Client);
