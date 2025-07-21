@@ -451,6 +451,49 @@ namespace DiscordWordleBot.Interaction.Wordle
             await Context.Interaction.SendConfirmAsync($"已設定：夜間模式 {(setting.NightMode ? "開啟" : "關閉")}, 色盲高對比模式 {(setting.ColorBlindMode ? "開啟" : "關閉")}", ephemeral: true);
         }
 
+        [SlashCommand("share", "分享你今天的猜題結果")]
+        public async Task ShareAsync()
+        {
+            var userId = Context.User.Id;
+            var sessionJson = await _redis.StringGetAsync($"wordle:{userId}");
+            var answer = _service.GetDailyAnswer();
+            if (string.IsNullOrEmpty(answer))
+            {
+                await Context.Interaction.SendErrorAsync("今日 Wordle 答案尚未設定，請稍後再試。");
+                return;
+            }
+            if (sessionJson.IsNullOrEmpty)
+            {
+                await Context.Interaction.SendErrorAsync("你今天還沒玩過 Wordle，無法分享結果。");
+                return;
+            }
+            var session = JsonConvert.DeserializeObject<WordleSession>(sessionJson!);
+            // 僅允許已猜完（答對或次數已滿）才可分享
+            if (!(session.Guesses.Contains(answer) || session.Guesses.Count >= MaxGuesses))
+            {
+                await Context.Interaction.SendErrorAsync("你今天還沒完成遊戲，無法分享結果。");
+                return;
+            }
+            try
+            {
+                var imageBytes = DrawWordleImage(session.Guesses, answer, false, session, false);
+                using var memoryStream = new MemoryStream(imageBytes);
+                var embed = new EmbedBuilder()
+                    .WithColor(Discord.Color.Blue)
+                    .WithTitle($"{Context.User.Username} 的 Wordle 結果")
+                    .WithDescription($"{session.Guesses.Count} / {MaxGuesses} 次完成今日 Wordle！")
+                    .WithImageUrl("attachment://wordle_share.png")
+                    .WithFooter("Wordle 分享");
+                await Context.Interaction.RespondWithFileAsync(memoryStream, "wordle_share.png", embed: embed.Build(), ephemeral: false);
+            }
+            catch (Exception)
+            {
+                // fallback: emoji grid (no letters)
+                string emojiGrid = BuildEmojiGrid(session.Guesses, answer, false, session);
+                await Context.Interaction.SendConfirmAsync($"{Context.User.Username} 的 Wordle 結果\n\n{emojiGrid}", ephemeral: false);
+            }
+        }
+
         // 取得使用者的 Wordle 模式設定
         private static WordleUserSetting GetUserSetting(ulong userId)
         {
