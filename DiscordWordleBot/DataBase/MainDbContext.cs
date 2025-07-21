@@ -5,6 +5,7 @@ namespace DiscordWordleBot.DataBase
     public class MainDbContext : DbContext
     {
         public DbSet<GuildConfig> GuildConfig { get; set; }
+        public DbSet<WordleUserSetting> WordleUserSetting { get; set; }
 
         protected override void OnConfiguring(DbContextOptionsBuilder options)
             => options.UseSqlite($"Data Source={Utility.GetDataFilePath("DataBase.db")}");

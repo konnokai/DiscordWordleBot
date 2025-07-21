@@ -1,4 +1,6 @@
 ﻿using Discord.Interactions;
+using DiscordWordleBot.DataBase;
+using DiscordWordleBot.DataBase.Table;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing.Processing;
@@ -12,6 +14,9 @@ namespace DiscordWordleBot.Interaction.Wordle
     {
         public List<string> Guesses { get; set; } = new();
         public bool HintUsed { get; set; } = false;
+        // 新增：夜間模式與色盲模式
+        public bool NightMode { get; set; } = false;
+        public bool ColorBlindMode { get; set; } = false;
     }
 
     [Group("wordle", "Wordle 遊戲")]
@@ -26,6 +31,19 @@ namespace DiscordWordleBot.Interaction.Wordle
         private static readonly SixLabors.ImageSharp.Color Green = SixLabors.ImageSharp.Color.ParseHex("6aaa64");
         private static readonly SixLabors.ImageSharp.Color Yellow = SixLabors.ImageSharp.Color.ParseHex("c9b458");
         private static readonly SixLabors.ImageSharp.Color Gray = SixLabors.ImageSharp.Color.ParseHex("787c7e");
+        // 夜間模式顏色
+        private static readonly SixLabors.ImageSharp.Color NightGreen = SixLabors.ImageSharp.Color.ParseHex("538d4e");
+        private static readonly SixLabors.ImageSharp.Color NightYellow = SixLabors.ImageSharp.Color.ParseHex("b59f3b");
+        private static readonly SixLabors.ImageSharp.Color NightGray = SixLabors.ImageSharp.Color.ParseHex("3a3a3c");
+        private static readonly SixLabors.ImageSharp.Color NightBackground = SixLabors.ImageSharp.Color.ParseHex("121213");
+        // 色盲模式顏色
+        private static readonly SixLabors.ImageSharp.Color ColorBlindOrange = SixLabors.ImageSharp.Color.ParseHex("f5793a");
+        private static readonly SixLabors.ImageSharp.Color ColorBlindBlue = SixLabors.ImageSharp.Color.ParseHex("85c0f9");
+        // 夜間+色盲
+        private static readonly SixLabors.ImageSharp.Color NightColorBlindOrange = SixLabors.ImageSharp.Color.ParseHex("f5793a");
+        private static readonly SixLabors.ImageSharp.Color NightColorBlindBlue = SixLabors.ImageSharp.Color.ParseHex("85c0f9");
+        private static readonly SixLabors.ImageSharp.Color NightColorBlindGray = NightGray;
+
         private static readonly int CellSize = 24;
         private static readonly int CellPadding = 4;
 
@@ -88,13 +106,14 @@ namespace DiscordWordleBot.Interaction.Wordle
                 return;
             }
 
+            // 取得使用者偏好
+            var userSetting = GetUserSetting(userId);
+
             WordleSession session;
             if (sessionJson.IsNullOrEmpty)
             {
                 // 自動建立新 session 並設置過期時間
-                session = new WordleSession { Guesses = new List<string>(), HintUsed = false };
-                await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session), GetExpireTimeSpan());
-                //await Context.Interaction.SendConfirmAsync($"Wordle 遊戲開始！你有 {MaxGuesses} 次機會。", false, true);
+                session = new WordleSession { Guesses = [], HintUsed = false };
             }
             else
             {
@@ -106,6 +125,9 @@ namespace DiscordWordleBot.Interaction.Wordle
                     return;
                 }
             }
+            // 將偏好寫入 session
+            session.NightMode = userSetting.NightMode;
+            session.ColorBlindMode = userSetting.ColorBlindMode;
 
             session.Guesses.Add(word);
             await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session), GetExpireTimeSpan());
@@ -131,7 +153,7 @@ namespace DiscordWordleBot.Interaction.Wordle
 
             try
             {
-                var imageBytes = DrawWordleImage(session.Guesses, answer);
+                var imageBytes = DrawWordleImage(session.Guesses, answer, true, session);
                 using var memoryStream = new MemoryStream(imageBytes);
                 var embed = new EmbedBuilder()
                     .WithColor(finished ? Discord.Color.Green : Discord.Color.Orange)
@@ -145,7 +167,7 @@ namespace DiscordWordleBot.Interaction.Wordle
             catch (Exception)
             {
                 // fallback: emoji grid
-                string emojiGrid = BuildEmojiGrid(session.Guesses, answer);
+                string emojiGrid = BuildEmojiGrid(session.Guesses, answer, true, session);
                 await Context.Interaction.SendConfirmAsync($"{resultMessage}\n\n{emojiGrid}", ephemeral: true);
             }
 
@@ -153,10 +175,8 @@ namespace DiscordWordleBot.Interaction.Wordle
             {
                 try
                 {
-                    var imageBytes2 = DrawWordleImage(session.Guesses, answer, false);
+                    var imageBytes2 = DrawWordleImage(session.Guesses, answer, false, session);
                     using var memoryStream2 = new MemoryStream(imageBytes2);
-
-                    // 不刪除 Redis Key，讓使用者今日無法再玩
 
                     var embed2 = new EmbedBuilder()
                         .WithColor(finished ? Discord.Color.Green : Discord.Color.Orange)
@@ -170,27 +190,32 @@ namespace DiscordWordleBot.Interaction.Wordle
                 catch (Exception)
                 {
                     // fallback: emoji grid (no letters)
-                    string emojiGrid = BuildEmojiGrid(session.Guesses, answer, false);
+                    string emojiGrid = BuildEmojiGrid(session.Guesses, answer, false, session);
                     await Context.Interaction.FollowupAsync($"{Context.User} 結束了遊戲！\n\n{emojiGrid}");
                 }
             }
         }
 
         // 新增：將猜測結果轉為 emoji grid
-        private static string BuildEmojiGrid(List<string> guesses, string answer, bool showLetter = true)
+        private static string BuildEmojiGrid(List<string> guesses, string answer, bool showLetter = true, WordleSession? session = null)
         {
-            // 🟩🟨⬜
+            // 根據 session 設定選擇 emoji
+            bool colorBlind = session?.ColorBlindMode ?? false;
+            string greenEmoji = colorBlind ? "🟧" : "🟩"; // 橙色
+            string yellowEmoji = colorBlind ? "🟦" : "🟨"; // 藍色
+            string grayEmoji = "⬜";
+
             var result = new StringBuilder();
             foreach (var guess in guesses)
             {
                 for (int i = 0; i < 5; i++)
                 {
                     if (guess[i] == answer[i])
-                        result.Append("🟩");
+                        result.Append(greenEmoji);
                     else if (answer.Contains(guess[i]))
-                        result.Append("🟨");
+                        result.Append(yellowEmoji);
                     else
-                        result.Append('⬜');
+                        result.Append(grayEmoji);
                 }
                 if (showLetter)
                 {
@@ -203,10 +228,42 @@ namespace DiscordWordleBot.Interaction.Wordle
             return result.ToString();
         }
 
-        private byte[] DrawWordleImage(List<string> guesses, string answer, bool isNeedDrawLatter = true)
+        private byte[] DrawWordleImage(List<string> guesses, string answer, bool isNeedDrawLatter = true, WordleSession? session = null)
         {
             if (_font == null)
                 throw new InvalidOperationException("字型未正確載入，無法繪製圖片。請檢查字型檔案是否存在。");
+
+            // 根據 session 設定選擇顏色
+            bool night = session?.NightMode ?? false;
+            bool colorBlind = session?.ColorBlindMode ?? false;
+
+            SixLabors.ImageSharp.Color GetCellColor(char guessChar, char answerChar, string answerStr, int col)
+            {
+                if (colorBlind && night)
+                {
+                    if (guessChar == answerChar) return NightColorBlindOrange;
+                    else if (answerStr.Contains(guessChar)) return NightColorBlindBlue;
+                    else return NightColorBlindGray;
+                }
+                else if (colorBlind)
+                {
+                    if (guessChar == answerChar) return ColorBlindOrange;
+                    else if (answerStr.Contains(guessChar)) return ColorBlindBlue;
+                    else return Gray;
+                }
+                else if (night)
+                {
+                    if (guessChar == answerChar) return NightGreen;
+                    else if (answerStr.Contains(guessChar)) return NightYellow;
+                    else return NightGray;
+                }
+                else
+                {
+                    if (guessChar == answerChar) return Green;
+                    else if (answerStr.Contains(guessChar)) return Yellow;
+                    else return Gray;
+                }
+            }
 
             try
             {
@@ -214,7 +271,7 @@ namespace DiscordWordleBot.Interaction.Wordle
                 int width = 5 * CellSize + 4 * CellPadding;
                 int height = rows * CellSize + (rows - 1) * CellPadding;
                 using var image = new Image<Rgba32>(width, height);
-                image.Mutate(ctx => ctx.Fill(Brushes.Solid(SixLabors.ImageSharp.Color.White)));
+                image.Mutate(ctx => ctx.Fill(Brushes.Solid(night ? NightBackground : SixLabors.ImageSharp.Color.White)));
                 var fontCollection = new FontCollection();
                 for (int row = 0; row < rows; row++)
                 {
@@ -223,9 +280,7 @@ namespace DiscordWordleBot.Interaction.Wordle
                     {
                         int x = col * (CellSize + CellPadding);
                         int y = row * (CellSize + CellPadding);
-                        var color = Gray;
-                        if (guess[col] == answer[col]) color = Green;
-                        else if (answer.Contains(guess[col])) color = Yellow;
+                        var color = GetCellColor(guess[col], answer[col], answer, col);
                         var rect = new Rectangle(x, y, CellSize, CellSize);
                         image.Mutate(ctx => ctx.Fill(Brushes.Solid(color), rect));
 
@@ -294,6 +349,49 @@ namespace DiscordWordleBot.Interaction.Wordle
             session.HintUsed = true;
             await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session), GetExpireTimeSpan());
             await Context.Interaction.SendConfirmAsync($"提示：答案包含字母 {hintChar.ToString().ToUpper()} (不保證位置)", ephemeral: true);
+        }
+
+        [SlashCommand("mode", "切換夜間模式或色盲高對比模式")]
+        public async Task ModeAsync(
+            [Summary("night", "夜間模式 (true/false)")] bool? night = null,
+            [Summary("colorblind", "色盲高對比模式 (true/false)")] bool? colorBlind = null)
+        {
+            var userId = Context.User.Id;
+            UpdateUserSetting(userId, night, colorBlind);
+            var setting = GetUserSetting(userId);
+            await Context.Interaction.SendConfirmAsync($"已設定：夜間模式 {(setting.NightMode ? "開啟" : "關閉")}, 色盲高對比模式 {(setting.ColorBlindMode ? "開啟" : "關閉")}", ephemeral: true);
+        }
+
+        // 取得使用者的 Wordle 模式設定
+        private static WordleUserSetting GetUserSetting(ulong userId)
+        {
+            using var db = MainDbContext.GetDbContext();
+            var setting = db.WordleUserSetting.FirstOrDefault(x => x.UserId == userId);
+            if (setting == null)
+            {
+                setting = new WordleUserSetting { UserId = userId, NightMode = false, ColorBlindMode = false };
+                db.WordleUserSetting.Add(setting);
+                db.SaveChanges();
+            }
+            return setting;
+        }
+
+        // 更新使用者的 Wordle 模式設定
+        private static void UpdateUserSetting(ulong userId, bool? night, bool? colorBlind)
+        {
+            using var db = MainDbContext.GetDbContext();
+            var setting = db.WordleUserSetting.FirstOrDefault(x => x.UserId == userId);
+            if (setting == null)
+            {
+                setting = new WordleUserSetting { UserId = userId, NightMode = night ?? false, ColorBlindMode = colorBlind ?? false };
+                db.WordleUserSetting.Add(setting);
+            }
+            else
+            {
+                if (night.HasValue) setting.NightMode = night.Value;
+                if (colorBlind.HasValue) setting.ColorBlindMode = colorBlind.Value;
+            }
+            db.SaveChanges();
         }
     }
 }
