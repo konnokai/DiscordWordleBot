@@ -494,6 +494,61 @@ namespace DiscordWordleBot.Interaction.Wordle
             }
         }
 
+        [SlashCommand("view", "偷看其他玩家的猜題過程 (你必須完成今日遊戲)")]
+        public async Task ViewAsync([Summary("user", "要偷看的對象")] IUser user)
+        {
+            var myId = Context.User.Id;
+            var targetId = user.Id;
+            if (myId == targetId)
+            {
+                await Context.Interaction.SendErrorAsync("不能偷看自己！");
+                return;
+            }
+            var mySessionJson = await _redis.StringGetAsync($"wordle:{myId}");
+            var targetSessionJson = await _redis.StringGetAsync($"wordle:{targetId}");
+            var answer = _service.GetDailyAnswer();
+            if (string.IsNullOrEmpty(answer))
+            {
+                await Context.Interaction.SendErrorAsync("今日 Wordle 答案尚未設定，請稍後再試。");
+                return;
+            }
+            if (mySessionJson.IsNullOrEmpty)
+            {
+                await Context.Interaction.SendErrorAsync("你必須完成今日遊戲才可偷看他人。");
+                return;
+            }
+            var mySession = JsonConvert.DeserializeObject<WordleSession>(mySessionJson!);
+            bool myDone = mySession.Guesses.Contains(answer) || mySession.Guesses.Count >= MaxGuesses;
+            if (!myDone)
+            {
+                await Context.Interaction.SendErrorAsync("你必須完成今日遊戲才可偷看他人。");
+                return;
+            }
+            if (targetSessionJson.IsNullOrEmpty)
+            {
+                await Context.Interaction.SendErrorAsync("對方今天還沒玩過 Wordle。");
+                return;
+            }
+            var targetSession = JsonConvert.DeserializeObject<WordleSession>(targetSessionJson!);
+            try
+            {
+                var imageBytes = DrawWordleImage(targetSession.Guesses, answer, true, targetSession);
+                using var memoryStream = new MemoryStream(imageBytes);
+                var embed = new EmbedBuilder()
+                    .WithColor(Discord.Color.Purple)
+                    .WithTitle($"{user.Username} 的猜題過程")
+                    .WithDescription($"目前已猜 {targetSession.Guesses.Count} 次")
+                    .WithImageUrl("attachment://wordle_view.png")
+                    .WithFooter("僅供娛樂，請勿惡意騷擾對方");
+                await Context.Interaction.RespondWithFileAsync(memoryStream, "wordle_view.png", embed: embed.Build(), ephemeral: true);
+            }
+            catch (Exception)
+            {
+                string emojiGrid = BuildEmojiGrid(targetSession.Guesses, answer, true, targetSession);
+                await Context.Interaction.SendConfirmAsync($"{user.Username} 的猜題過程\n\n{emojiGrid}", ephemeral: true);
+            }
+        }
+
         // 取得使用者的 Wordle 模式設定
         private static WordleUserSetting GetUserSetting(ulong userId)
         {
