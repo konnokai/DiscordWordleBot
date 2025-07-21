@@ -228,6 +228,35 @@ namespace DiscordWordleBot.Interaction.Wordle
             return result.ToString();
         }
 
+        private enum LetterState { None, Gray, Yellow, Green }
+
+        // 取得每個字母的最高狀態（綠>黃>灰）
+        private static Dictionary<char, LetterState> GetKeyboardLetterStates(List<string> guesses, string answer)
+        {
+            var dict = new Dictionary<char, LetterState>();
+            foreach (var guess in guesses)
+            {
+                for (int i = 0; i < guess.Length; i++)
+                {
+                    char c = guess[i];
+                    if (!dict.TryGetValue(c, out var state)) state = LetterState.None;
+                    if (c == answer[i])
+                        dict[c] = LetterState.Green;
+                    else if (answer.Contains(c))
+                    {
+                        if (state != LetterState.Green)
+                            dict[c] = LetterState.Yellow;
+                    }
+                    else
+                    {
+                        if (state != LetterState.Green && state != LetterState.Yellow)
+                            dict[c] = LetterState.Gray;
+                    }
+                }
+            }
+            return dict;
+        }
+
         private byte[] DrawWordleImage(List<string> guesses, string answer, bool isNeedDrawLatter = true, WordleSession? session = null)
         {
             if (_font == null)
@@ -265,14 +294,28 @@ namespace DiscordWordleBot.Interaction.Wordle
                 }
             }
 
+            // 鍵盤字母排列
+            string[] keyboardRows = new[]
+            {
+                "QWERTYUIOP",
+                "ASDFGHJKL",
+                "ZXCVBNM"
+            };
+            int keyCellW = 24, keyCellH = 32, keyCellPad = 4;
+            int keyboardRowsCount = keyboardRows.Length;
+            int keyboardWidth = 10 * keyCellW + 9 * keyCellPad;
+            int keyboardHeight = keyboardRowsCount * keyCellH + (keyboardRowsCount - 1) * keyCellPad;
+            int rows = guesses.Count;
+            int gridWidth = 5 * CellSize + 4 * CellPadding;
+            int gridHeight = rows * CellSize + (rows - 1) * CellPadding;
+            int width = Math.Max(gridWidth, keyboardWidth);
+            int height = gridHeight + 24 + keyboardHeight; // 24px padding between grid and keyboard
+
             try
             {
-                int rows = guesses.Count;
-                int width = 5 * CellSize + 4 * CellPadding;
-                int height = rows * CellSize + (rows - 1) * CellPadding;
                 using var image = new Image<Rgba32>(width, height);
                 image.Mutate(ctx => ctx.Fill(Brushes.Solid(night ? NightBackground : SixLabors.ImageSharp.Color.White)));
-                var fontCollection = new FontCollection();
+                // 畫主格子
                 for (int row = 0; row < rows; row++)
                 {
                     var guess = guesses[row];
@@ -283,7 +326,6 @@ namespace DiscordWordleBot.Interaction.Wordle
                         var color = GetCellColor(guess[col], answer[col], answer, col);
                         var rect = new Rectangle(x, y, CellSize, CellSize);
                         image.Mutate(ctx => ctx.Fill(Brushes.Solid(color), rect));
-
                         // Draw letter
                         if (isNeedDrawLatter)
                         {
@@ -296,6 +338,38 @@ namespace DiscordWordleBot.Interaction.Wordle
                             };
                             image.Mutate(ctx => ctx.DrawText(richTextOptions, letter, SixLabors.ImageSharp.Color.White));
                         }
+                    }
+                }
+                // 畫鍵盤
+                var letterStates = GetKeyboardLetterStates(guesses, answer);
+                int kbStartY = gridHeight + 24;
+                for (int r = 0; r < keyboardRows.Length; r++)
+                {
+                    string row = keyboardRows[r];
+                    int rowLen = row.Length;
+                    int rowStartX = (width - (rowLen * keyCellW + (rowLen - 1) * keyCellPad)) / 2;
+                    for (int c = 0; c < rowLen; c++)
+                    {
+                        char ch = row[c];
+                        LetterState state = letterStates.TryGetValue(char.ToLower(ch), out var s) ? s : LetterState.None;
+                        SixLabors.ImageSharp.Color keyColor = state switch
+                        {
+                            LetterState.Green => colorBlind && night ? NightColorBlindOrange : colorBlind ? ColorBlindOrange : night ? NightGreen : Green,
+                            LetterState.Yellow => colorBlind && night ? NightColorBlindBlue : colorBlind ? ColorBlindBlue : night ? NightYellow : Yellow,
+                            LetterState.Gray => colorBlind && night ? NightColorBlindGray : colorBlind ? Gray : night ? NightGray : Gray,
+                            _ => night ? NightGray : Gray
+                        };
+                        var rect = new Rectangle(rowStartX + c * (keyCellW + keyCellPad), kbStartY + r * (keyCellH + keyCellPad), keyCellW, keyCellH);
+                        image.Mutate(ctx => ctx.Fill(Brushes.Solid(keyColor), rect));
+                        // Draw letter
+                        var letter = ch.ToString();
+                        var richTextOptions = new RichTextOptions(_font)
+                        {
+                            Origin = new PointF(rect.X + keyCellW / 2f, rect.Y + keyCellH / 2f),
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            VerticalAlignment = VerticalAlignment.Center
+                        };
+                        image.Mutate(ctx => ctx.DrawText(richTextOptions, letter, SixLabors.ImageSharp.Color.Black));
                     }
                 }
                 using var ms = new MemoryStream();
