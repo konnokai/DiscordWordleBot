@@ -40,10 +40,10 @@ namespace DiscordWordleBot.Interaction.Wordle
         {
             try
             {
-                if (!File.Exists(Program.GetDataFilePath("WordleAnswers.txt")))
+                if (!File.Exists(DiscordWordleBot.Utility.GetDataFilePath("WordleAnswers.txt")))
                     return [];
 
-                return [.. File.ReadAllLines(Program.GetDataFilePath("WordleAnswers.txt"))
+                return [.. File.ReadAllLines(DiscordWordleBot.Utility.GetDataFilePath("WordleAnswers.txt"))
                 .Select(x => x.Trim().ToLowerInvariant())
                 .Where(x => x.Length == 5)
                 .Distinct()];

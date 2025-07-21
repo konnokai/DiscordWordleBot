@@ -78,7 +78,7 @@ namespace DiscordWordleBot.Interaction.Help
 #if DEBUG
                 embed.Title += " (測試版)";
 #endif
-                embed.WithDescription(File.ReadAllText(Program.GetDataFilePath("HelpDescription.txt")).Replace("\\n", "\n") + $"\n\n您可以透過: [Patreon]({PatreonUrl}) 或 [Paypal]({PaypalUrl}) 來贊助輔助小幫手");
+                embed.WithDescription(File.ReadAllText(DiscordWordleBot.Utility.GetDataFilePath("HelpDescription.txt")).Replace("\\n", "\n") + $"\n\n您可以透過: [Patreon]({PatreonUrl}) 或 [Paypal]({PaypalUrl}) 來贊助輔助小幫手");
                 await RespondAsync(embed: embed.Build());
                 return;
             }

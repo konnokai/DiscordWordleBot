@@ -45,10 +45,10 @@ namespace DiscordWordleBot
 
             timerUpdateStatus = new Timer(TimerHandler);
 
-            if (!Directory.Exists(Path.GetDirectoryName(GetDataFilePath(""))))
-                Directory.CreateDirectory(Path.GetDirectoryName(GetDataFilePath("")));
+            if (!Directory.Exists(Path.GetDirectoryName(Utility.GetDataFilePath(""))))
+                Directory.CreateDirectory(Path.GetDirectoryName(Utility.GetDataFilePath("")));
 
-            if (!File.Exists(GetDataFilePath("DataBase.db")))
+            if (!File.Exists(Utility.GetDataFilePath("DataBase.db")))
             {
                 using var db = DbService.GetDbContext();
                 db.Database.EnsureCreated();
@@ -169,17 +169,17 @@ namespace DiscordWordleBot
                 int commandCount = 0;
                 try
                 {
-                    if (File.Exists(GetDataFilePath("CommandCount.bin")))
-                        commandCount = BitConverter.ToInt32(File.ReadAllBytes(GetDataFilePath("CommandCount.bin")));
+                    if (File.Exists(Utility.GetDataFilePath("CommandCount.bin")))
+                        commandCount = BitConverter.ToInt32(File.ReadAllBytes(Utility.GetDataFilePath("CommandCount.bin")));
 
-                    File.WriteAllBytes(GetDataFilePath("CommandCount.bin"), BitConverter.GetBytes(serviceProvider.GetService<InteractionHandler>().CommandCount));
+                    File.WriteAllBytes(Utility.GetDataFilePath("CommandCount.bin"), BitConverter.GetBytes(serviceProvider.GetService<InteractionHandler>().CommandCount));
                 }
                 catch (Exception ex)
                 {
                     Log.Error(ex.Demystify(), "設定指令數量失敗，請確認檔案是否正常");
 
-                    if (File.Exists(GetDataFilePath("CommandCount.bin")))
-                        File.Delete(GetDataFilePath("CommandCount.bin"));
+                    if (File.Exists(Utility.GetDataFilePath("CommandCount.bin")))
+                        File.Delete(Utility.GetDataFilePath("CommandCount.bin"));
 
                     IsDisconnect = true;
                     return;
@@ -320,12 +320,6 @@ namespace DiscordWordleBot
                         break;
                 }
             });
-        }
-
-        public static string GetDataFilePath(string fileName)
-        {
-            return AppDomain.CurrentDomain.BaseDirectory + "Data" +
-                (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "\\" : "/") + fileName;
         }
 
         public static async Task SendMessageToDiscord(string content)

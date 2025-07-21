@@ -37,7 +37,7 @@ namespace DiscordWordleBot.Interaction.Wordle
             try
             {
                 // 優先載入 Data/Fonts/NotoSans-Medium.ttf
-                var fontPath = Program.GetDataFilePath("Fonts\\NotoSans-Medium.ttf");
+                var fontPath = DiscordWordleBot.Utility.GetDataFilePath($"Fonts{DiscordWordleBot.Utility.GetPlatformSlash()}NotoSans-Medium.ttf");
                 if (File.Exists(fontPath))
                 {
                     var fontCollection = new FontCollection();

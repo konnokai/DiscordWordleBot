@@ -1,5 +1,7 @@
 ﻿#nullable enable
 
+using System.Runtime.InteropServices;
+
 namespace DiscordWordleBot
 {
     public static class Utility
@@ -22,5 +24,11 @@ namespace DiscordWordleBot
             }
             return Convert.ChangeType(value, T);
         }
+
+        public static string GetDataFilePath(string fileName)
+            => $"{AppDomain.CurrentDomain.BaseDirectory}Data{GetPlatformSlash()}{fileName}";
+
+        public static string GetPlatformSlash()
+            => RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "\\" : "/";
     }
 }
