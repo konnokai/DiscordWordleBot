@@ -21,7 +21,7 @@ namespace DiscordWordleBot.Interaction.Wordle
 
         private readonly DiscordSocketClient _client;
         private readonly IDatabase _redis;
-        private readonly Font _font;
+        private readonly Font? _font;
 
         private static readonly SixLabors.ImageSharp.Color Green = SixLabors.ImageSharp.Color.ParseHex("6aaa64");
         private static readonly SixLabors.ImageSharp.Color Yellow = SixLabors.ImageSharp.Color.ParseHex("c9b458");
@@ -36,18 +36,23 @@ namespace DiscordWordleBot.Interaction.Wordle
 
             try
             {
-                // 嘗試載入常見 Linux 字型
-                _font = SystemFonts.Families.Any(f => f.Name == "DejaVu Sans")
-                    ? SystemFonts.CreateFont("DejaVu Sans", 14, FontStyle.Bold)
-                    : SystemFonts.Families.Any(f => f.Name == "Liberation Sans")
-                        ? SystemFonts.CreateFont("Liberation Sans", 14, FontStyle.Bold)
-                        : SystemFonts.Families.Any(f => f.Name == "Arial")
-                            ? SystemFonts.CreateFont("Arial", 14, FontStyle.Bold)
-                            : SystemFonts.CreateFont(SystemFonts.Families.First().Name, 14, FontStyle.Bold);
+                // 優先載入 Data/Fonts/NotoSans-Medium.ttf
+                var fontPath = Program.GetDataFilePath("Fonts\\NotoSans-Medium.ttf");
+                if (File.Exists(fontPath))
+                {
+                    var fontCollection = new FontCollection();
+                    var family = fontCollection.Add(fontPath);
+                    _font = family.CreateFont(14, FontStyle.Bold);
+                }
+                else
+                {
+                    // fallback: 系統字型
+                    _font = SystemFonts.CreateFont(SystemFonts.Families.First().Name, 14, FontStyle.Bold);
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                _font = SystemFonts.CreateFont(SystemFonts.Families.First().Name, 14, FontStyle.Bold);
+                Log.Error(ex, "載入字型時發生錯誤，將不繪製圖片");
             }
         }
 
@@ -142,7 +147,6 @@ namespace DiscordWordleBot.Interaction.Wordle
                 // fallback: emoji grid
                 string emojiGrid = BuildEmojiGrid(session.Guesses, answer);
                 await Context.Interaction.SendConfirmAsync($"{resultMessage}\n\n{emojiGrid}", ephemeral: true);
-                return;
             }
 
             if (isDone)
@@ -201,6 +205,9 @@ namespace DiscordWordleBot.Interaction.Wordle
 
         private byte[] DrawWordleImage(List<string> guesses, string answer, bool isNeedDrawLatter = true)
         {
+            if (_font == null)
+                throw new InvalidOperationException("字型未正確載入，無法繪製圖片。請檢查字型檔案是否存在。");
+
             try
             {
                 int rows = guesses.Count;
