@@ -2,7 +2,7 @@
 
 namespace DiscordWordleBot.DataBase
 {
-    class MainDbContext : DbContext
+    public class MainDbContext : DbContext
     {
         public DbSet<GuildConfig> GuildConfig { get; set; }
 

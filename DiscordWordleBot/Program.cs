@@ -1,4 +1,6 @@
 ﻿using Discord.Interactions;
+using DiscordWordleBot.DataBase;
+using DiscordWordleBot.HttpClients;
 using DiscordWordleBot.Interaction;
 using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
@@ -13,15 +15,21 @@ namespace DiscordWordleBot
         public enum UpdateStatusFlags { Guild, Member, Info }
 
         public static string VERSION => GetLinkerTime(Assembly.GetEntryAssembly());
-        public static IUser ApplicatonOwner { get; private set; } = null;
+
+        public static ConnectionMultiplexer Redis { get; set; }
+        public static ISubscriber RedisSub { get; set; }
+        public static IDatabase RedisDb { get; set; }
+        public static MainDbService DbService { get; private set; }
+
         public static Stopwatch StopWatch { get; private set; } = new Stopwatch();
-        public static DiscordSocketClient Client { get; set; }
+        public static DiscordSocketClient Client { get => client; }
+        public static IUser ApplicatonOwner { get; private set; } = null;
         public static UpdateStatusFlags UpdateStatus { get; set; } = UpdateStatusFlags.Guild;
-        public static ConnectionMultiplexer RedisConnection { get; private set; }
         public static bool IsDisconnect { get; internal set; } = false;
         public static bool IsConnect { get; private set; } = false;
 
         private static Timer timerUpdateStatus;
+        private static DiscordSocketClient client;
         private static readonly BotConfig _botConfig = new();
 
         static void Main(string[] args)
@@ -33,24 +41,26 @@ namespace DiscordWordleBot
             Console.CancelKeyPress += Console_CancelKeyPress;
 
             _botConfig.InitBotConfig();
+            DbService = new MainDbService();
 
             timerUpdateStatus = new Timer(TimerHandler);
 
             if (!Directory.Exists(Path.GetDirectoryName(GetDataFilePath(""))))
                 Directory.CreateDirectory(Path.GetDirectoryName(GetDataFilePath("")));
 
-            //using (var db = new SupportContext())
-            //{
-            //    if (!File.Exists(GetDataFilePath("DataBase.db")))
-            //    {
-            //        db.Database.EnsureCreated();
-            //    }
-            //}
+            if (!File.Exists(GetDataFilePath("DataBase.db")))
+            {
+                using var db = DbService.GetDbContext();
+                db.Database.EnsureCreated();
+            }
 
             try
             {
-                global::RedisConnection.Init(_botConfig.RedisOption);
-                RedisConnection = global::RedisConnection.Instance.ConnectionMultiplexer;
+                RedisConnection.Init(_botConfig.RedisOption);
+                Redis = RedisConnection.Instance.ConnectionMultiplexer;
+                RedisSub = Redis.GetSubscriber();
+                RedisDb = Redis.GetDatabase();
+
                 Log.Info("Redis已連線");
             }
             catch (Exception ex)
@@ -60,7 +70,7 @@ namespace DiscordWordleBot
                 return;
             }
 
-            MainAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+            StartAndBlockAsync().ConfigureAwait(false).GetAwaiter().GetResult();
         }
 
         private static void TimerHandler(object state)
@@ -76,19 +86,64 @@ namespace DiscordWordleBot
             e.Cancel = true;
         }
 
-        static async Task MainAsync()
+        public static async Task StartAndBlockAsync()
         {
-            Client = new DiscordSocketClient(new DiscordSocketConfig
+            client = new DiscordSocketClient(new DiscordSocketConfig()
             {
-                LogLevel = LogSeverity.Warning,
+                LogLevel = LogSeverity.Verbose,
                 ConnectionTimeout = int.MaxValue,
-                MessageCacheSize = 50,
-                GatewayIntents = GatewayIntents.All & ~GatewayIntents.GuildInvites & ~GatewayIntents.GuildScheduledEvents,
+                MessageCacheSize = 0,
+                // 因為沒有註冊事件，Discord .NET 建議可移除這兩個沒用到的特權
+                // https://dotblogs.com.tw/yc421206/2015/10/20/c_scharp_enum_of_flags
+                GatewayIntents = GatewayIntents.AllUnprivileged & ~GatewayIntents.GuildInvites & ~GatewayIntents.GuildScheduledEvents,
                 AlwaysDownloadDefaultStickers = false,
                 AlwaysResolveStickers = false,
                 FormatUsersInBidirectionalUnicode = false,
                 LogGatewayIntentWarnings = false,
             });
+
+            #region 初始化Discord設定與事件
+            client.Log += Log.LogMsg;
+
+            client.Ready += async () =>
+            {
+                Log.Info($"已透過 {Client.CurrentUser.Username} 身分登入");
+
+                StopWatch.Start();
+                timerUpdateStatus.Change(0, 15 * 60 * 1000);
+
+                ApplicatonOwner = (await client.GetApplicationInfoAsync()).Owner;
+                IsConnect = true;
+            };
+
+            client.LeftGuild += (guild) =>
+            {
+                Log.Info($"離開伺服器: {guild.Name}");
+                return Task.CompletedTask;
+            };
+            #endregion
+
+#if DEBUG || RELEASE
+            Log.Info("登入中...");
+
+            try
+            {
+                await client.LoginAsync(TokenType.Bot, _botConfig.DiscordToken);
+                await client.StartAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex.Demystify(), "Discord 登入失敗!");
+                return;
+            }
+
+            do { await Task.Delay(200); }
+            while (!IsConnect);
+
+            Log.Info("登入成功!");
+
+            UptimeKumaClient.Init(_botConfig.UptimeKumaPushUrl, client);
+#endif
 
             #region 初始化互動指令系統
             var interactionServices = new ServiceCollection()
@@ -98,48 +153,52 @@ namespace DiscordWordleBot
                 .AddSingleton(new InteractionService(Client, new InteractionServiceConfig()
                 {
                     AutoServiceScopes = true,
-                    UseCompiledLambda = true,
-                    EnableAutocompleteHandlers = true,
+                    UseCompiledLambda = false,
+                    EnableAutocompleteHandlers = false,
                     DefaultRunMode = RunMode.Async
                 }));
 
             interactionServices.LoadInteractionFrom(Assembly.GetAssembly(typeof(InteractionHandler)));
-            IServiceProvider iService = interactionServices.BuildServiceProvider();
-            await iService.GetService<InteractionHandler>().InitializeAsync();
+            IServiceProvider serviceProvider = interactionServices.BuildServiceProvider();
+            await serviceProvider.GetService<InteractionHandler>().InitializeAsync();
             #endregion
 
-            Client.JoinedGuild += async (guild) =>
+            #region 註冊互動指令
+            try
             {
-                await SendMessageToDiscord($"加入 {guild.Name}({guild.Id})\n擁有者: {guild.OwnerId}");
-            };
-
-            Client.Ready += async () =>
-            {
-                Log.Info($"已透過 {Client.CurrentUser.Username} 身分登入");
-
-                timerUpdateStatus.Change(0, 20 * 60 * 1000);
-
-                UptimeKumaClient.Init(_botConfig.UptimeKumaPushUrl, Client);
-
-                ApplicatonOwner = (await Client.GetApplicationInfoAsync().ConfigureAwait(false)).Owner;
-
-                IsConnect = true;
-
+                int commandCount = 0;
                 try
                 {
-                    InteractionService interactionService = iService.GetService<InteractionService>();
+                    if (File.Exists(GetDataFilePath("CommandCount.bin")))
+                        commandCount = BitConverter.ToInt32(File.ReadAllBytes(GetDataFilePath("CommandCount.bin")));
 
+                    File.WriteAllBytes(GetDataFilePath("CommandCount.bin"), BitConverter.GetBytes(serviceProvider.GetService<InteractionHandler>().CommandCount));
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex.Demystify(), "設定指令數量失敗，請確認檔案是否正常");
+
+                    if (File.Exists(GetDataFilePath("CommandCount.bin")))
+                        File.Delete(GetDataFilePath("CommandCount.bin"));
+
+                    IsDisconnect = true;
+                    return;
+                }
+
+                if (commandCount != serviceProvider.GetService<InteractionHandler>().CommandCount)
+                {
+                    InteractionService interactionService = serviceProvider.GetService<InteractionService>();
 #if DEBUG
-                    if (_botConfig.TestSlashCommandGuildId == 0 || Client.GetGuild(_botConfig.TestSlashCommandGuildId) == null)
+                    if (_botConfig.TestSlashCommandGuildId == 0 || client.GetGuild(_botConfig.TestSlashCommandGuildId) == null)
                         Log.Warn("未設定測試Slash指令的伺服器或伺服器不存在，略過");
                     else
                     {
                         try
                         {
-                            var result = await interactionService.AddModulesToGuildAsync(_botConfig.TestSlashCommandGuildId, true, interactionService.Modules.Where((x) => x.DontAutoRegister).ToArray());
+                            var result = await interactionService.RegisterCommandsToGuildAsync(_botConfig.TestSlashCommandGuildId);
                             Log.Info($"已註冊指令 ({_botConfig.TestSlashCommandGuildId}) : {string.Join(", ", result.Select((x) => x.Name))}");
 
-                            result = await interactionService.RegisterCommandsToGuildAsync(_botConfig.TestSlashCommandGuildId);
+                            result = await interactionService.AddModulesToGuildAsync(_botConfig.TestSlashCommandGuildId, false, interactionService.Modules.Where((x) => x.DontAutoRegister).ToArray());
                             Log.Info($"已註冊指令 ({_botConfig.TestSlashCommandGuildId}) : {string.Join(", ", result.Select((x) => x.Name))}");
                         }
                         catch (Exception ex)
@@ -148,36 +207,20 @@ namespace DiscordWordleBot
                             Log.Error(ex.ToString());
                         }
                     }
-                }
-#else
-                    int commandCount = 0;
+#elif RELEASE
                     try
                     {
-
-                        if (File.Exists(GetDataFilePath("CommandCount.bin")))
-                            commandCount = BitConverter.ToInt32(File.ReadAllBytes(GetDataFilePath("CommandCount.bin")));
-
-                        File.WriteAllBytes(GetDataFilePath("CommandCount.bin"), BitConverter.GetBytes(iService.GetService<InteractionHandler>().CommandCount));
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error("設定指令數量失敗，請確認檔案是否正常");
-                        Log.Error(ex.Message);
-                        if (File.Exists(GetDataFilePath("CommandCount.bin")))
-                            File.Delete(GetDataFilePath("CommandCount.bin"));
-
-                        IsDisconnect = true;
-                        return;
-                    }
-
-                    if (commandCount != iService.GetService<InteractionHandler>().CommandCount)
-                    {
+                        if (_botConfig.TestSlashCommandGuildId != 0 && client.GetGuild(_botConfig.TestSlashCommandGuildId) != null)
+                        {
+                            var result = await interactionService.RemoveModulesFromGuildAsync(_botConfig.TestSlashCommandGuildId, interactionService.Modules.Where((x) => !x.DontAutoRegister).ToArray());
+                            Log.Info($"({_botConfig.TestSlashCommandGuildId}) 已移除測試指令，剩餘指令: {string.Join(", ", result.Select((x) => x.Name))}");
+                        }
                         try
                         {
                             foreach (var item in interactionService.Modules.Where((x) => x.Preconditions.Any((x) => x is Interaction.Attribute.RequireGuildAttribute)))
                             {
-                                var guildId = ((Interaction.Attribute.RequireGuildAttribute)item.Preconditions.FirstOrDefault((x) => x is Interaction.Attribute.RequireGuildAttribute)).GuildId;
-                                var guild = Client.GetGuild(guildId.Value);
+                                var guildId = ((Interaction.Attribute.RequireGuildAttribute)item.Preconditions.Single((x) => x is Interaction.Attribute.RequireGuildAttribute)).GuildId;
+                                var guild = client.GetGuild(guildId.Value);
 
                                 if (guild == null)
                                 {
@@ -185,8 +228,8 @@ namespace DiscordWordleBot
                                     continue;
                                 }
 
-                                var result = await interactionService.AddModulesToGuildAsync(guild, true, item);
-                                Log.Info($"已在 {guild.Name}({guild.Id}) 註冊指令: {string.Join(", ", result.Select((x) => x.Name))}");
+                                var result = await interactionService.AddModulesToGuildAsync(guild, false, item);
+                                Log.Info($"已在 {guild.Name}({guild.Id}) 註冊指令: {string.Join(", ", item.SlashCommands.Select((x) => x.Name))}");
                             }
                         }
                         catch (Exception ex)
@@ -198,30 +241,59 @@ namespace DiscordWordleBot
                         await interactionService.RegisterCommandsGloballyAsync();
                         Log.Info("已註冊全球指令");
                     }
-                }
+                    catch (Exception ex)
+                    {
+                        Log.Error("取得指令數量失敗，請確認Redis伺服器是否可以存取");
+                        Log.Error(ex.Message);
+                        IsDisconnect = true;
+                    }
 #endif
-                catch (Exception ex)
-                {
-                    Log.Error("註冊Slash指令失敗，關閉中...");
-                    Log.Error(ex.ToString());
-                    IsDisconnect = true;
                 }
-
-                Log.FormatColorWrite("準備完成", ConsoleColor.Green);
-            };
-
-            #region Login
-            await Client.LoginAsync(TokenType.Bot, _botConfig.DiscordToken);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("註冊Slash指令失敗，關閉中...");
+                Log.Error(ex.ToString());
+                IsDisconnect = true;
+            }
             #endregion
 
-            await Client.StartAsync();
+            // 因為會用到 DiscordWebhookClient Service，所以沒辦法往上移動到 Region 內
+            client.JoinedGuild += (guild) =>
+            {
+                Log.Info($"加入伺服器: {guild.Name}");
+
+                var hasInvitePermission = guild.GetUser(client.CurrentUser.Id)?.GuildPermissions.CreateInstantInvite ?? false;
+                if (!hasInvitePermission)
+                {
+                    serviceProvider.GetService<DiscordWebhookClient>().SendMessageToDiscord($"加入 {guild.Name} ({guild.Id})\n" +
+                        $"擁有者: {guild.OwnerId}\n" +
+                        $"未開放邀請權限，已離開");
+                    guild.LeaveAsync().GetAwaiter().GetResult();
+                    return Task.CompletedTask;
+                }
+
+                serviceProvider.GetService<DiscordWebhookClient>().SendMessageToDiscord($"加入 {guild.Name}({guild.Id})\n" +
+                    $"擁有者: {guild.OwnerId}");
+
+                using (var db = DbService.GetDbContext())
+                {
+                    if (!db.GuildConfig.Any(x => x.GuildId == guild.Id))
+                    {
+                        db.GuildConfig.Add(new GuildConfig() { GuildId = guild.Id });
+                        db.SaveChanges();
+                    }
+                }
+
+                return Task.CompletedTask;
+            };
+
+            Log.Info("已初始化完成!");
 
             do { await Task.Delay(1000); }
             while (!IsDisconnect);
 
-            await Client.StopAsync();
-
-            return;
+            await client.StopAsync();
         }
 
         public static void ChangeStatus()
