@@ -105,74 +105,128 @@ namespace DiscordWordleBot.Interaction.Wordle
                 resultMessage = $"你還有 {MaxGuesses - session.Guesses.Count} 次機會。";
             }
 
-            var imageBytes = DrawWordleImage(session.Guesses, answer);
-            using var memoryStream = new MemoryStream(imageBytes);
-            var embed = new EmbedBuilder()
-                .WithColor(finished ? Discord.Color.Green : Discord.Color.Orange)
-                .WithTitle("Wordle 遊戲")
-                .WithDescription(resultMessage)
-                .WithImageUrl("attachment://wordle.png")
-                .WithFooter($"已猜 {session.Guesses.Count} 次");
+            try
+            {
+                var imageBytes = DrawWordleImage(session.Guesses, answer);
+                using var memoryStream = new MemoryStream(imageBytes);
+                var embed = new EmbedBuilder()
+                    .WithColor(finished ? Discord.Color.Green : Discord.Color.Orange)
+                    .WithTitle("Wordle 遊戲")
+                    .WithDescription(resultMessage)
+                    .WithImageUrl("attachment://wordle.png")
+                    .WithFooter($"已猜 {session.Guesses.Count} 次");
 
-            await Context.Interaction.RespondWithFileAsync(memoryStream, "wordle.png", embed: embed.Build(), ephemeral: true);
+                await Context.Interaction.RespondWithFileAsync(memoryStream, "wordle.png", embed: embed.Build(), ephemeral: true);
+            }
+            catch (Exception)
+            {
+                // fallback: emoji grid
+                string emojiGrid = BuildEmojiGrid(session.Guesses, answer);
+                await Context.Interaction.SendConfirmAsync($"{resultMessage}\n\n{emojiGrid}", ephemeral: true);
+                return;
+            }
 
             if (isDone)
             {
-                var imageBytes2 = DrawWordleImage(session.Guesses, answer, false);
-                using var memoryStream2 = new MemoryStream(imageBytes2);
+                try
+                {
+                    var imageBytes2 = DrawWordleImage(session.Guesses, answer, false);
+                    using var memoryStream2 = new MemoryStream(imageBytes2);
 
-                // 不刪除 Redis Key，讓使用者今日無法再玩
+                    // 不刪除 Redis Key，讓使用者今日無法再玩
 
-                var embed2 = new EmbedBuilder()
-                    .WithColor(finished ? Discord.Color.Green : Discord.Color.Orange)
-                    .WithTitle("Wordle 遊戲")
-                    .WithDescription($"{Context.User} 結束了遊戲！")
-                    .WithImageUrl("attachment://wordle_nolatter.png")
-                    .WithFooter($"已猜 {session.Guesses.Count} 次");
+                    var embed2 = new EmbedBuilder()
+                        .WithColor(finished ? Discord.Color.Green : Discord.Color.Orange)
+                        .WithTitle("Wordle 遊戲")
+                        .WithDescription($"{Context.User} 結束了遊戲！")
+                        .WithImageUrl("attachment://wordle_nolatter.png")
+                        .WithFooter($"已猜 {session.Guesses.Count} 次");
 
-                await Context.Interaction.FollowupWithFileAsync(memoryStream2, "wordle_nolatter.png", embed: embed2.Build());
+                    await Context.Interaction.FollowupWithFileAsync(memoryStream2, "wordle_nolatter.png", embed: embed2.Build());
+                }
+                catch (Exception)
+                {
+                    // fallback: emoji grid (no letters)
+                    string emojiGrid = BuildEmojiGrid(session.Guesses, answer, false);
+                    await Context.Interaction.FollowupAsync($"{Context.User} 結束了遊戲！\n\n{emojiGrid}");
+                }
             }
+        }
+
+        // 新增：將猜測結果轉為 emoji grid
+        private static string BuildEmojiGrid(List<string> guesses, string answer, bool showLetter = true)
+        {
+            // 🟩🟨⬜
+            var result = new StringBuilder();
+            foreach (var guess in guesses)
+            {
+                for (int i = 0; i < 5; i++)
+                {
+                    if (guess[i] == answer[i])
+                        result.Append("🟩");
+                    else if (answer.Contains(guess[i]))
+                        result.Append("🟨");
+                    else
+                        result.Append('⬜');
+                }
+                if (showLetter)
+                {
+                    result.Append("  ");
+                    for (int i = 0; i < 5; i++)
+                        result.Append(guess[i].ToString().ToUpper());
+                }
+                result.AppendLine();
+            }
+            return result.ToString();
         }
 
         private static byte[] DrawWordleImage(List<string> guesses, string answer, bool isNeedDrawLatter = true)
         {
-            int rows = guesses.Count;
-            int width = 5 * CellSize + 4 * CellPadding;
-            int height = rows * CellSize + (rows - 1) * CellPadding;
-            using var image = new Image<Rgba32>(width, height);
-            image.Mutate(ctx => ctx.Fill(Brushes.Solid(SixLabors.ImageSharp.Color.White)));
-            var fontCollection = new FontCollection();
-            var font = SystemFonts.CreateFont("Arial", 14, FontStyle.Bold);
-            for (int row = 0; row < rows; row++)
+            try
             {
-                var guess = guesses[row];
-                for (int col = 0; col < 5; col++)
+                int rows = guesses.Count;
+                int width = 5 * CellSize + 4 * CellPadding;
+                int height = rows * CellSize + (rows - 1) * CellPadding;
+                using var image = new Image<Rgba32>(width, height);
+                image.Mutate(ctx => ctx.Fill(Brushes.Solid(SixLabors.ImageSharp.Color.White)));
+                var fontCollection = new FontCollection();
+                var font = SystemFonts.CreateFont("Arial", 14, FontStyle.Bold);
+                for (int row = 0; row < rows; row++)
                 {
-                    int x = col * (CellSize + CellPadding);
-                    int y = row * (CellSize + CellPadding);
-                    var color = Gray;
-                    if (guess[col] == answer[col]) color = Green;
-                    else if (answer.Contains(guess[col])) color = Yellow;
-                    var rect = new Rectangle(x, y, CellSize, CellSize);
-                    image.Mutate(ctx => ctx.Fill(Brushes.Solid(color), rect));
-
-                    // Draw letter
-                    if (isNeedDrawLatter)
+                    var guess = guesses[row];
+                    for (int col = 0; col < 5; col++)
                     {
-                        var letter = guess[col].ToString().ToUpperInvariant();
-                        var richTextOptions = new RichTextOptions(font)
+                        int x = col * (CellSize + CellPadding);
+                        int y = row * (CellSize + CellPadding);
+                        var color = Gray;
+                        if (guess[col] == answer[col]) color = Green;
+                        else if (answer.Contains(guess[col])) color = Yellow;
+                        var rect = new Rectangle(x, y, CellSize, CellSize);
+                        image.Mutate(ctx => ctx.Fill(Brushes.Solid(color), rect));
+
+                        // Draw letter
+                        if (isNeedDrawLatter)
                         {
-                            Origin = new PointF(x + CellSize / 2f, y + CellSize / 2f),
-                            HorizontalAlignment = HorizontalAlignment.Center,
-                            VerticalAlignment = VerticalAlignment.Center
-                        };
-                        image.Mutate(ctx => ctx.DrawText(richTextOptions, letter, SixLabors.ImageSharp.Color.White));
+                            var letter = guess[col].ToString().ToUpperInvariant();
+                            var richTextOptions = new RichTextOptions(font)
+                            {
+                                Origin = new PointF(x + CellSize / 2f, y + CellSize / 2f),
+                                HorizontalAlignment = HorizontalAlignment.Center,
+                                VerticalAlignment = VerticalAlignment.Center
+                            };
+                            image.Mutate(ctx => ctx.DrawText(richTextOptions, letter, SixLabors.ImageSharp.Color.White));
+                        }
                     }
                 }
+                using var ms = new MemoryStream();
+                image.SaveAsPng(ms);
+                return ms.ToArray();
             }
-            using var ms = new MemoryStream();
-            image.SaveAsPng(ms);
-            return ms.ToArray();
+            catch (Exception ex)
+            {
+                Log.Error(ex, "繪製 Wordle 圖片時發生錯誤");
+                throw;
+            }
         }
 
         [SlashCommand("hint", "取得提示")]
