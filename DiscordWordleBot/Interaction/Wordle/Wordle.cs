@@ -17,9 +17,12 @@ namespace DiscordWordleBot.Interaction.Wordle
     [Group("wordle", "Wordle 遊戲")]
     public class Wordle : TopLevelModule<WordleService>
     {
+        private const int MaxGuesses = 6;
+
         private readonly DiscordSocketClient _client;
         private readonly IDatabase _redis;
-        private const int MaxGuesses = 6;
+        private readonly Font _font;
+
         private static readonly SixLabors.ImageSharp.Color Green = SixLabors.ImageSharp.Color.ParseHex("6aaa64");
         private static readonly SixLabors.ImageSharp.Color Yellow = SixLabors.ImageSharp.Color.ParseHex("c9b458");
         private static readonly SixLabors.ImageSharp.Color Gray = SixLabors.ImageSharp.Color.ParseHex("787c7e");
@@ -30,6 +33,22 @@ namespace DiscordWordleBot.Interaction.Wordle
         {
             _client = client;
             _redis = RedisConnection.RedisDb;
+
+            try
+            {
+                // 嘗試載入常見 Linux 字型
+                _font = SystemFonts.Families.Any(f => f.Name == "DejaVu Sans")
+                    ? SystemFonts.CreateFont("DejaVu Sans", 14, FontStyle.Bold)
+                    : SystemFonts.Families.Any(f => f.Name == "Liberation Sans")
+                        ? SystemFonts.CreateFont("Liberation Sans", 14, FontStyle.Bold)
+                        : SystemFonts.Families.Any(f => f.Name == "Arial")
+                            ? SystemFonts.CreateFont("Arial", 14, FontStyle.Bold)
+                            : SystemFonts.CreateFont(SystemFonts.Families.First().Name, 14, FontStyle.Bold);
+            }
+            catch
+            {
+                _font = SystemFonts.CreateFont(SystemFonts.Families.First().Name, 14, FontStyle.Bold);
+            }
         }
 
         private static TimeSpan GetExpireTimeSpan()
@@ -180,7 +199,7 @@ namespace DiscordWordleBot.Interaction.Wordle
             return result.ToString();
         }
 
-        private static byte[] DrawWordleImage(List<string> guesses, string answer, bool isNeedDrawLatter = true)
+        private byte[] DrawWordleImage(List<string> guesses, string answer, bool isNeedDrawLatter = true)
         {
             try
             {
@@ -190,7 +209,6 @@ namespace DiscordWordleBot.Interaction.Wordle
                 using var image = new Image<Rgba32>(width, height);
                 image.Mutate(ctx => ctx.Fill(Brushes.Solid(SixLabors.ImageSharp.Color.White)));
                 var fontCollection = new FontCollection();
-                var font = SystemFonts.CreateFont("Arial", 14, FontStyle.Bold);
                 for (int row = 0; row < rows; row++)
                 {
                     var guess = guesses[row];
@@ -208,7 +226,7 @@ namespace DiscordWordleBot.Interaction.Wordle
                         if (isNeedDrawLatter)
                         {
                             var letter = guess[col].ToString().ToUpperInvariant();
-                            var richTextOptions = new RichTextOptions(font)
+                            var richTextOptions = new RichTextOptions(_font)
                             {
                                 Origin = new PointF(x + CellSize / 2f, y + CellSize / 2f),
                                 HorizontalAlignment = HorizontalAlignment.Center,
