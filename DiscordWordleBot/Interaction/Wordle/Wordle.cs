@@ -152,7 +152,7 @@ namespace DiscordWordleBot.Interaction.Wordle
             {
                 session = JsonConvert.DeserializeObject<WordleSession>(sessionJson!);
                 // 若已猜完（答對或次數已滿）則提示今日已遊玩過
-                if (session.Guesses.Contains(answer) || session.Guesses.Count >= MaxGuesses)
+                if (IsSessionFinished(session))
                 {
                     await Context.Interaction.SendErrorAsync($"你今天已經玩過了！正確答案是：{answer}");
                     return;
@@ -176,7 +176,7 @@ namespace DiscordWordleBot.Interaction.Wordle
             session.Guesses.Add(word);
             await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session), GetExpireTimeSpan());
 
-            var finished = word == answer || session.Guesses.Count >= MaxGuesses;
+            var finished = IsSessionFinished(session);
             bool isDone;
             string resultMessage;
             if (word == answer)
@@ -536,9 +536,13 @@ namespace DiscordWordleBot.Interaction.Wordle
             bool? hardToSet = hard;
             if (sessionExists && hard.HasValue)
             {
-                // 已經開始遊戲，不允許變更困難模式
-                hardBlocked = true;
-                hardToSet = null;
+                var session = JsonConvert.DeserializeObject<WordleSession>(sessionJson!);
+                bool finished = IsSessionFinished(session);
+                if (!finished)
+                {
+                    hardBlocked = true;
+                    hardToSet = null;
+                }
             }
             UpdateUserSetting(userId, night, colorBlind, hardToSet);
             var setting = GetUserSetting(userId);
@@ -570,7 +574,7 @@ namespace DiscordWordleBot.Interaction.Wordle
             }
             var session = JsonConvert.DeserializeObject<WordleSession>(sessionJson!);
             // 僅允許已猜完（答對或次數已滿）才可分享
-            if (!(session.Guesses.Contains(answer) || session.Guesses.Count >= MaxGuesses))
+            if (!IsSessionFinished(session))
             {
                 await Context.Interaction.SendErrorAsync("你今天還沒完成遊戲，無法分享結果。");
                 return;
@@ -616,7 +620,6 @@ namespace DiscordWordleBot.Interaction.Wordle
             }
 
             var mySession = JsonConvert.DeserializeObject<WordleSession>(mySessionJson!);
-
             // 如果是偷看自己，允許任何時候偷看
             if (myId == targetId)
             {
@@ -640,7 +643,7 @@ namespace DiscordWordleBot.Interaction.Wordle
             else
             {
                 // 偷看他人時，必須完成今日遊戲
-                bool myDone = mySession.Guesses.Contains(answer) || mySession.Guesses.Count >= MaxGuesses;
+                bool myDone = IsSessionFinished(mySession);
                 if (!myDone)
                 {
                     await Context.Interaction.SendErrorAsync("你必須完成今日遊戲才可偷看他人。");
@@ -692,6 +695,13 @@ namespace DiscordWordleBot.Interaction.Wordle
             string msg = $"{Context.User.Mention} 從 {setting.FirstGuessDate?.ToString("yyyy/MM/dd") ?? "未知"} 到現在的 Wordle 總分: {score} 分";
 
             await Context.Interaction.SendConfirmAsync(msg, ephemeral: true);
+        }
+
+        // 判斷本日遊戲是否已完成（猜中或次數已滿）
+        private bool IsSessionFinished(WordleSession session)
+        {
+            var answer = _service.GetDailyAnswer();
+            return session.Guesses.Contains(answer) || session.Guesses.Count >= MaxGuesses;
         }
 
         // 取得使用者的 Wordle 模式設定
