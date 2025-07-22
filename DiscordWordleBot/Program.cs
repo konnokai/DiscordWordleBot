@@ -187,6 +187,19 @@ namespace DiscordWordleBot
                 if (commandCount != serviceProvider.GetService<InteractionHandler>().CommandCount)
                 {
                     InteractionService interactionService = serviceProvider.GetService<InteractionService>();
+
+                    try
+                    {
+                        await interactionService.RegisterCommandsGloballyAsync(true);
+                        Log.Info($"已註冊全球指令: {string.Join(", ", interactionService.Modules.Select((x) => x.Name))} ({serviceProvider.GetService<InteractionHandler>().CommandCount})");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "註冊全球指令失敗");
+                        IsDisconnect = true;
+                        return;
+                    }
+
 #if DEBUG
                     if (_botConfig.TestSlashCommandGuildId == 0 || client.GetGuild(_botConfig.TestSlashCommandGuildId) == null)
                         Log.Warn("未設定測試Slash指令的伺服器或伺服器不存在，略過");
@@ -194,10 +207,10 @@ namespace DiscordWordleBot
                     {
                         try
                         {
-                            var result = await interactionService.RegisterCommandsToGuildAsync(_botConfig.TestSlashCommandGuildId);
-                            Log.Info($"已註冊指令 ({_botConfig.TestSlashCommandGuildId}) : {string.Join(", ", result.Select((x) => x.Name))}");
+                            //var result = await interactionService.RegisterCommandsToGuildAsync(_botConfig.TestSlashCommandGuildId, true);
+                            //Log.Info($"已註冊指令 ({_botConfig.TestSlashCommandGuildId}) : {string.Join(", ", result.Select((x) => x.Name))}");
 
-                            result = await interactionService.AddModulesToGuildAsync(_botConfig.TestSlashCommandGuildId, false, interactionService.Modules.Where((x) => x.DontAutoRegister).ToArray());
+                            var result = await interactionService.AddModulesToGuildAsync(_botConfig.TestSlashCommandGuildId, false, interactionService.Modules.Where((x) => x.DontAutoRegister).ToArray());
                             Log.Info($"已註冊指令 ({_botConfig.TestSlashCommandGuildId}) : {string.Join(", ", result.Select((x) => x.Name))}");
                         }
                         catch (Exception ex)
@@ -209,42 +222,24 @@ namespace DiscordWordleBot
 #elif RELEASE
                     try
                     {
-                        if (_botConfig.TestSlashCommandGuildId != 0 && client.GetGuild(_botConfig.TestSlashCommandGuildId) != null)
+                        foreach (var item in interactionService.Modules.Where((x) => x.Preconditions.Any((x) => x is Interaction.Attribute.RequireGuildAttribute)))
                         {
-                            var result = await interactionService.RemoveModulesFromGuildAsync(_botConfig.TestSlashCommandGuildId, interactionService.Modules.Where((x) => !x.DontAutoRegister).ToArray());
-                            Log.Info($"({_botConfig.TestSlashCommandGuildId}) 已移除測試指令，剩餘指令: {string.Join(", ", result.Select((x) => x.Name))}");
-                        }
-                        try
-                        {
-                            foreach (var item in interactionService.Modules.Where((x) => x.Preconditions.Any((x) => x is Interaction.Attribute.RequireGuildAttribute)))
+                            var guildId = ((Interaction.Attribute.RequireGuildAttribute)item.Preconditions.Single((x) => x is Interaction.Attribute.RequireGuildAttribute)).GuildId;
+                            var guild = client.GetGuild(guildId.Value);
+
+                            if (guild == null)
                             {
-                                var guildId = ((Interaction.Attribute.RequireGuildAttribute)item.Preconditions.Single((x) => x is Interaction.Attribute.RequireGuildAttribute)).GuildId;
-                                var guild = client.GetGuild(guildId.Value);
-
-                                if (guild == null)
-                                {
-                                    Log.Warn($"{item.Name} 註冊失敗，伺服器 {guildId} 不存在");
-                                    continue;
-                                }
-
-                                var result = await interactionService.AddModulesToGuildAsync(guild, false, item);
-                                Log.Info($"已在 {guild.Name}({guild.Id}) 註冊指令: {string.Join(", ", item.SlashCommands.Select((x) => x.Name))}");
+                                Log.Warn($"{item.Name} 註冊失敗，伺服器 {guildId} 不存在");
+                                continue;
                             }
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Error("註冊伺服器專用Slash指令失敗");
-                            Log.Error(ex.ToString());
-                        }
 
-                        await interactionService.RegisterCommandsGloballyAsync();
-                        Log.Info("已註冊全球指令");
+                            var result = await interactionService.AddModulesToGuildAsync(guild, false, item);
+                            Log.Info($"已在 {guild.Name}({guild.Id}) 註冊指令: {string.Join(", ", item.SlashCommands.Select((x) => x.Name))}");
+                        }
                     }
                     catch (Exception ex)
                     {
-                        Log.Error("取得指令數量失敗，請確認Redis伺服器是否可以存取");
-                        Log.Error(ex.Message);
-                        IsDisconnect = true;
+                        Log.Error(ex, "註冊伺服器專用 Slash 指令失敗");
                     }
 #endif
                 }
