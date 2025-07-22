@@ -237,7 +237,11 @@ namespace DiscordWordleBot.Interaction.Wordle
                             if (!setting.FirstGuessDate.HasValue)
                                 setting.FirstGuessDate = DateTime.Now;
                             if (score > 0)
+                            {
                                 setting.Score += score;
+                                if (session.HardMode)
+                                    setting.Score += 2; // 困難模式額外加分
+                            }
                             totalScore = setting.Score;
                             db.SaveChanges();
                         }
@@ -249,7 +253,9 @@ namespace DiscordWordleBot.Interaction.Wordle
                 }
 
                 // 顯示本次得分與總分
-                string scoreMsg = $"\n本次得分：{lastScore} 分\n目前總分：{totalScore} 分";
+                string scoreMsg = $"\n本次得分：{lastScore} 分" +
+                                  (session.HardMode && lastScore > 0 ? "（含困難模式加 2 分）" : "") +
+                                  $"\n目前總分：{totalScore} 分";
 
                 try
                 {
@@ -261,7 +267,7 @@ namespace DiscordWordleBot.Interaction.Wordle
                         .WithTitle("Wordle 遊戲")
                         .WithDescription($"{Context.User.Mention} 完成了遊戲！{scoreMsg}")
                         .WithImageUrl("attachment://wordle_nolatter.png")
-                        .WithFooter($"已猜 {session.Guesses.Count} 次");
+                        .WithFooter($"已猜 {session.Guesses.Count} 次" + (session.HardMode ? " | 困難模式" : ""));
 
                     await Context.Interaction.FollowupWithFileAsync(memoryStream2, "wordle_nolatter.png", embed: embed2.Build());
                 }
@@ -523,13 +529,26 @@ namespace DiscordWordleBot.Interaction.Wordle
             [Summary("hard", "困難模式 (true/false) - 已發現的提示必須在後續猜測中使用")] bool? hard = null)
         {
             var userId = Context.User.Id;
-            UpdateUserSetting(userId, night, colorBlind, hard);
+            var sessionJson = await _redis.StringGetAsync($"wordle:{userId}");
+            bool sessionExists = !sessionJson.IsNullOrEmpty;
+            bool hardBlocked = false;
+            bool? hardToSet = hard;
+            if (sessionExists && hard.HasValue)
+            {
+                // 已經開始遊戲，不允許變更困難模式
+                hardBlocked = true;
+                hardToSet = null;
+            }
+            UpdateUserSetting(userId, night, colorBlind, hardToSet);
             var setting = GetUserSetting(userId);
-            await Context.Interaction.SendConfirmAsync(
-                $"已設定：夜間模式 {(setting.NightMode ? "開啟" : "關閉")}, " +
-                $"色盲高對比模式 {(setting.ColorBlindMode ? "開啟" : "關閉")}, " + 
-                $"困難模式 {(setting.HardMode ? "開啟" : "關閉")}", 
-                ephemeral: true);
+            string msg = $"夜間模式: {(setting.NightMode ? "開啟" : "關閉")}\n" +
+                         $"色盲高對比模式: {(setting.ColorBlindMode ? "開啟" : "關閉")}\n" +
+                         $"困難模式: {(setting.HardMode ? "開啟" : "關閉")}";
+            if (hardBlocked)
+            {
+                msg += "\n你已經開始遊戲，無法變更困難模式。";
+            }
+            await Context.Interaction.SendConfirmAsync(msg, ephemeral: true);
         }
 
         [SlashCommand("share", "分享你今天的猜題結果")]
@@ -562,7 +581,7 @@ namespace DiscordWordleBot.Interaction.Wordle
                 var embed = new EmbedBuilder()
                     .WithColor(Discord.Color.Blue)
                     .WithTitle($"{Context.User.Username} 的 Wordle 結果")
-                    .WithDescription($"{session.Guesses.Count} / {MaxGuesses} 次完成今日 Wordle！")
+                    .WithDescription($"{session.Guesses.Count} / {MaxGuesses} 次完成今日 Wordle！" + (session.HardMode ? " (困難模式)" : ""))
                     .WithImageUrl("attachment://wordle_share.png")
                     .WithFooter("Wordle 分享");
                 await Context.Interaction.RespondWithFileAsync(memoryStream, "wordle_share.png", embed: embed.Build(), ephemeral: false);
@@ -619,7 +638,7 @@ namespace DiscordWordleBot.Interaction.Wordle
                     .WithColor(Discord.Color.Purple)
                     .WithTitle($"{user.Username} 的猜題過程")
                     .WithImageUrl("attachment://wordle_view.png")
-                    .WithFooter($"已猜 {targetSession.Guesses.Count} 次");
+                    .WithFooter($"已猜 {targetSession.Guesses.Count} 次" + (targetSession.HardMode ? " | 困難模式" : ""));
                 await Context.Interaction.RespondWithFileAsync(memoryStream, "wordle_view.png", embed: embed.Build(), ephemeral: true);
             }
             catch (Exception)
