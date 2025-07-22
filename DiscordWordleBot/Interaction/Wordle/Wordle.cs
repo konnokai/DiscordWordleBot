@@ -176,22 +176,18 @@ namespace DiscordWordleBot.Interaction.Wordle
             session.Guesses.Add(word);
             await _redis.StringSetAsync($"wordle:{userId}", JsonConvert.SerializeObject(session), GetExpireTimeSpan());
 
-            var finished = IsSessionFinished(session);
-            bool isDone;
             string resultMessage;
+            var finished = IsSessionFinished(session);
             if (word == answer)
             {
-                isDone = true;
                 resultMessage = $"恭喜你答對了！正確答案是：{answer}";
             }
             else if (finished)
             {
-                isDone = true;
                 resultMessage = $"你已經猜了 {MaxGuesses} 次，遊戲結束！正確答案是：{answer}";
             }
             else
             {
-                isDone = false;
                 resultMessage = $"你還有 {MaxGuesses - session.Guesses.Count} 次機會。";
             }
 
@@ -218,35 +214,32 @@ namespace DiscordWordleBot.Interaction.Wordle
             // 新增：完成作答時記錄首次猜題日期與分數
             int lastScore = 0;
             int totalScore = 0;
-            if (isDone)
+            if (finished)
             {
                 try
                 {
                     // 計算分數（倒扣制，沒猜中給 0 分）
                     int score = 0;
-                    if (session.Guesses.Contains(answer))
+                    if (session.Guesses.Contains(answer)) // 確保答案在猜測列表中才進入計算階段
                     {
-                        score = 6 - session.Guesses.IndexOf(answer); // 第一次猜中得6分，第二次5分...
-                        if (score < 0) score = 0;
+                        score = 6 - session.Guesses.IndexOf(answer); // 第一次猜中得 6 分，第二次 5 分...
+                        if (session.HardMode) score += 2; // 困難模式額外加 2 分
+                        //if (score < 0) score = 0; // 原則上分數不會小於 0，最後猜中也會有個 1 分，先拿掉等之後如果有超過 6 次答題的情況再看要怎麼改
                     }
+
+                    using var db = MainDbContext.GetDbContext();
+                    var setting = db.WordleUserSetting.FirstOrDefault(x => x.UserId == userId);
+                    if (setting != null) // 邏輯上不該會有 null
+                    {
+                        if (!setting.FirstGuessDate.HasValue)
+                            setting.FirstGuessDate = DateTime.Now;
+                        if (score > 0) // 只有猜中才計分
+                            setting.Score += score;
+                        totalScore = setting.Score;
+                        db.SaveChanges();
+                    }
+
                     lastScore = score;
-                    using (var db = MainDbContext.GetDbContext())
-                    {
-                        var setting = db.WordleUserSetting.FirstOrDefault(x => x.UserId == userId);
-                        if (setting != null)
-                        {
-                            if (!setting.FirstGuessDate.HasValue)
-                                setting.FirstGuessDate = DateTime.Now;
-                            if (score > 0)
-                            {
-                                setting.Score += score;
-                                if (session.HardMode)
-                                    setting.Score += 2; // 困難模式額外加分
-                            }
-                            totalScore = setting.Score;
-                            db.SaveChanges();
-                        }
-                    }
                 }
                 catch (Exception ex)
                 {
