@@ -1,6 +1,5 @@
 ﻿using Discord.Interactions;
 using DiscordWordleBot.DataBase;
-using DiscordWordleBot.DataBase.Table;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing.Processing;
@@ -24,7 +23,6 @@ namespace DiscordWordleBot.Interaction.Wordle
     {
         private const int MaxGuesses = 6;
 
-        private readonly DiscordSocketClient _client;
         private readonly IDatabase _redis;
         private readonly Font? _font;
 
@@ -49,9 +47,8 @@ namespace DiscordWordleBot.Interaction.Wordle
         private static readonly int CellSize = 24;
         private static readonly int CellPadding = 4;
 
-        public Wordle(DiscordSocketClient client)
+        public Wordle()
         {
-            _client = client;
             _redis = RedisConnection.RedisDb;
 
             try
@@ -173,8 +170,43 @@ namespace DiscordWordleBot.Interaction.Wordle
                 await Context.Interaction.SendConfirmAsync($"{resultMessage}\n\n{emojiGrid}", ephemeral: true);
             }
 
+            // 新增：完成作答時記錄首次猜題日期與分數
+            int lastScore = 0;
+            int totalScore = 0;
             if (isDone)
             {
+                try
+                {
+                    // 計算分數（倒扣制，沒猜中給 0 分）
+                    int score = 0;
+                    if (session.Guesses.Contains(answer))
+                    {
+                        score = 6 - session.Guesses.IndexOf(answer); // 第一次猜中得6分，第二次5分...
+                        if (score < 0) score = 0;
+                    }
+                    lastScore = score;
+                    using (var db = MainDbContext.GetDbContext())
+                    {
+                        var setting = db.WordleUserSetting.FirstOrDefault(x => x.UserId == userId);
+                        if (setting != null)
+                        {
+                            if (!setting.FirstGuessDate.HasValue)
+                                setting.FirstGuessDate = DateTime.Now;
+                            if (score > 0)
+                                setting.Score += score;
+                            totalScore = setting.Score;
+                            db.SaveChanges();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, $"({Context.User.Id}) 記錄 Wordle 分數時發生錯誤");
+                }
+
+                // 顯示本次得分與總分
+                string scoreMsg = $"\n本次得分：{lastScore} 分\n目前總分：{totalScore} 分";
+
                 try
                 {
                     var imageBytes2 = DrawWordleImage(session.Guesses, answer, false, session, false);
@@ -183,7 +215,7 @@ namespace DiscordWordleBot.Interaction.Wordle
                     var embed2 = new EmbedBuilder()
                         .WithColor(finished ? Discord.Color.Green : Discord.Color.Orange)
                         .WithTitle("Wordle 遊戲")
-                        .WithDescription($"{Context.User} 結束了遊戲！")
+                        .WithDescription($"{Context.User.Mention} 完成了遊戲！{scoreMsg}")
                         .WithImageUrl("attachment://wordle_nolatter.png")
                         .WithFooter($"已猜 {session.Guesses.Count} 次");
 
@@ -193,7 +225,7 @@ namespace DiscordWordleBot.Interaction.Wordle
                 {
                     // fallback: emoji grid (no letters)
                     string emojiGrid = BuildEmojiGrid(session.Guesses, answer, false, session);
-                    await Context.Interaction.FollowupAsync($"{Context.User} 結束了遊戲！\n\n{emojiGrid}");
+                    await Context.Interaction.FollowupAsync($"{Context.User.Mention} 完成了遊戲！\n\n{emojiGrid}\n{scoreMsg}");
                 }
             }
         }
@@ -537,9 +569,8 @@ namespace DiscordWordleBot.Interaction.Wordle
                 var embed = new EmbedBuilder()
                     .WithColor(Discord.Color.Purple)
                     .WithTitle($"{user.Username} 的猜題過程")
-                    .WithDescription($"目前已猜 {targetSession.Guesses.Count} 次")
                     .WithImageUrl("attachment://wordle_view.png")
-                    .WithFooter("僅供娛樂，請勿惡意騷擾對方");
+                    .WithFooter($"已猜 {targetSession.Guesses.Count} 次");
                 await Context.Interaction.RespondWithFileAsync(memoryStream, "wordle_view.png", embed: embed.Build(), ephemeral: true);
             }
             catch (Exception)
@@ -547,6 +578,25 @@ namespace DiscordWordleBot.Interaction.Wordle
                 string emojiGrid = BuildEmojiGrid(targetSession.Guesses, answer, true, targetSession);
                 await Context.Interaction.SendConfirmAsync($"{user.Username} 的猜題過程\n\n{emojiGrid}", ephemeral: true);
             }
+        }
+
+        [SlashCommand("score", "查詢你的 Wordle 總分")]
+        public async Task ScoreAsync()
+        {
+            var userId = Context.User.Id;
+
+            using var db = MainDbContext.GetDbContext();
+            var setting = db.WordleUserSetting.FirstOrDefault(x => x.UserId == userId);
+            if (setting == null || setting.FirstGuessDate == null)
+            {
+                await Context.Interaction.SendErrorAsync("你尚未開始過 Wordle 遊戲。");
+                return;
+            }
+
+            int score = setting?.Score ?? 0;
+            string msg = $"{Context.User.Mention} 從 {setting.FirstGuessDate?.ToString("yyyy/MM/dd") ?? "未知"} 到現在的 Wordle 總分: {score} 分";
+
+            await Context.Interaction.SendConfirmAsync(msg, ephemeral: true);
         }
 
         // 取得使用者的 Wordle 模式設定

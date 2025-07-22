@@ -10,6 +10,12 @@ namespace DiscordWordleBot.DataBase
         protected override void OnConfiguring(DbContextOptionsBuilder options)
             => options.UseSqlite($"Data Source={Utility.GetDataFilePath("DataBase.db")}");
 
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+            // 若有需要可於此處進行欄位預設值或索引設定
+        }
+
         public static MainDbContext GetDbContext()
         {
             var context = new MainDbContext();

@@ -6,7 +6,6 @@ using Microsoft.Extensions.DependencyInjection;
 using StackExchange.Redis;
 using System.Diagnostics;
 using System.Reflection;
-using System.Runtime.InteropServices;
 
 namespace DiscordWordleBot
 {
