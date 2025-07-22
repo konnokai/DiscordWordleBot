@@ -16,6 +16,8 @@ namespace DiscordWordleBot.Interaction.Wordle
         // 新增：夜間模式與色盲模式
         public bool NightMode { get; set; } = false;
         public bool ColorBlindMode { get; set; } = false;
+        // 新增：困難模式
+        public bool HardMode { get; set; } = false;
     }
 
     [Group("wordle", "Wordle 遊戲")]
@@ -80,6 +82,33 @@ namespace DiscordWordleBot.Interaction.Wordle
             return tomorrow - now;
         }
 
+        private bool ValidateHardMode(string guess, List<string> previousGuesses, string answer)
+        {
+            if (previousGuesses.Count == 0) return true;
+            
+            // 從之前的猜測中收集提示
+            var lastGuess = previousGuesses[^1];
+            for (int i = 0; i < 5; i++)
+            {
+                // 綠色提示（正確位置的字母）必須被使用
+                if (lastGuess[i] == answer[i] && guess[i] != answer[i])
+                    return false;
+            }
+
+            // 檢查黃色提示（正確字母但位置錯誤）
+            for (int i = 0; i < 5; i++)
+            {
+                if (lastGuess[i] != answer[i] && answer.Contains(lastGuess[i]))
+                {
+                    // 確保這個字母在新的猜測中被使用
+                    if (!guess.Contains(lastGuess[i]))
+                        return false;
+                }
+            }
+            
+            return true;
+        }
+
         [SlashCommand("guess", "猜一個五字英文單字")]
         public async Task GuessAsync([Summary("word", "你的猜測")] string word)
         {
@@ -112,7 +141,11 @@ namespace DiscordWordleBot.Interaction.Wordle
             if (sessionJson.IsNullOrEmpty)
             {
                 // 自動建立新 session 並設置過期時間
-                session = new WordleSession { Guesses = [], HintUsed = false };
+                session = new WordleSession { 
+                    Guesses = [], 
+                    HintUsed = false,
+                    HardMode = userSetting.HardMode 
+                };
             }
             else
             {
@@ -124,6 +157,17 @@ namespace DiscordWordleBot.Interaction.Wordle
                     return;
                 }
             }
+
+            // 困難模式檢查
+            if (session.HardMode)
+            {
+                if (!ValidateHardMode(word, session.Guesses, answer))
+                {
+                    await Context.Interaction.SendErrorAsync("困難模式：你必須使用之前猜測中發現的所有提示！");
+                    return;
+                }
+            }
+
             // 將偏好寫入 session
             session.NightMode = userSetting.NightMode;
             session.ColorBlindMode = userSetting.ColorBlindMode;
@@ -159,7 +203,7 @@ namespace DiscordWordleBot.Interaction.Wordle
                     .WithTitle("Wordle 遊戲")
                     .WithDescription(resultMessage)
                     .WithImageUrl("attachment://wordle.png")
-                    .WithFooter($"已猜 {session.Guesses.Count} 次");
+                    .WithFooter($"已猜 {session.Guesses.Count} 次" + (session.HardMode ? " | 困難模式" : ""));
 
                 await Context.Interaction.RespondWithFileAsync(memoryStream, "wordle.png", embed: embed.Build(), ephemeral: true);
             }
@@ -472,15 +516,20 @@ namespace DiscordWordleBot.Interaction.Wordle
             await Context.Interaction.SendConfirmAsync($"提示：答案包含字母 {hintChar.ToString().ToUpper()} (不保證位置)", ephemeral: true);
         }
 
-        [SlashCommand("mode", "切換夜間模式或色盲高對比模式")]
+        [SlashCommand("mode", "切換夜間模式、色盲高對比模式或困難模式")]
         public async Task ModeAsync(
             [Summary("night", "夜間模式 (true/false)")] bool? night = null,
-            [Summary("colorblind", "色盲高對比模式 (true/false)")] bool? colorBlind = null)
+            [Summary("colorblind", "色盲高對比模式 (true/false)")] bool? colorBlind = null,
+            [Summary("hard", "困難模式 (true/false) - 已發現的提示必須在後續猜測中使用")] bool? hard = null)
         {
             var userId = Context.User.Id;
-            UpdateUserSetting(userId, night, colorBlind);
+            UpdateUserSetting(userId, night, colorBlind, hard);
             var setting = GetUserSetting(userId);
-            await Context.Interaction.SendConfirmAsync($"已設定：夜間模式 {(setting.NightMode ? "開啟" : "關閉")}, 色盲高對比模式 {(setting.ColorBlindMode ? "開啟" : "關閉")}", ephemeral: true);
+            await Context.Interaction.SendConfirmAsync(
+                $"已設定：夜間模式 {(setting.NightMode ? "開啟" : "關閉")}, " +
+                $"色盲高對比模式 {(setting.ColorBlindMode ? "開啟" : "關閉")}, " + 
+                $"困難模式 {(setting.HardMode ? "開啟" : "關閉")}", 
+                ephemeral: true);
         }
 
         [SlashCommand("share", "分享你今天的猜題結果")]
@@ -606,7 +655,7 @@ namespace DiscordWordleBot.Interaction.Wordle
             var setting = db.WordleUserSetting.FirstOrDefault(x => x.UserId == userId);
             if (setting == null)
             {
-                setting = new WordleUserSetting { UserId = userId, NightMode = false, ColorBlindMode = false };
+                setting = new WordleUserSetting { UserId = userId, NightMode = false, ColorBlindMode = false, HardMode = false };
                 db.WordleUserSetting.Add(setting);
                 db.SaveChanges();
             }
@@ -614,19 +663,25 @@ namespace DiscordWordleBot.Interaction.Wordle
         }
 
         // 更新使用者的 Wordle 模式設定
-        private static void UpdateUserSetting(ulong userId, bool? night, bool? colorBlind)
+        private static void UpdateUserSetting(ulong userId, bool? night, bool? colorBlind, bool? hard)
         {
             using var db = MainDbContext.GetDbContext();
             var setting = db.WordleUserSetting.FirstOrDefault(x => x.UserId == userId);
             if (setting == null)
             {
-                setting = new WordleUserSetting { UserId = userId, NightMode = night ?? false, ColorBlindMode = colorBlind ?? false };
+                setting = new WordleUserSetting { 
+                    UserId = userId, 
+                    NightMode = night ?? false, 
+                    ColorBlindMode = colorBlind ?? false, 
+                    HardMode = hard ?? false 
+                };
                 db.WordleUserSetting.Add(setting);
             }
             else
             {
                 if (night.HasValue) setting.NightMode = night.Value;
                 if (colorBlind.HasValue) setting.ColorBlindMode = colorBlind.Value;
+                if (hard.HasValue) setting.HardMode = hard.Value;
             }
             db.SaveChanges();
         }
