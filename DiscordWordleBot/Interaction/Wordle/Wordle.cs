@@ -85,7 +85,7 @@ namespace DiscordWordleBot.Interaction.Wordle
         private bool ValidateHardMode(string guess, List<string> previousGuesses, string answer)
         {
             if (previousGuesses.Count == 0) return true;
-            
+
             // 從之前的猜測中收集提示
             var lastGuess = previousGuesses[^1];
             for (int i = 0; i < 5; i++)
@@ -105,7 +105,7 @@ namespace DiscordWordleBot.Interaction.Wordle
                         return false;
                 }
             }
-            
+
             return true;
         }
 
@@ -141,10 +141,11 @@ namespace DiscordWordleBot.Interaction.Wordle
             if (sessionJson.IsNullOrEmpty)
             {
                 // 自動建立新 session 並設置過期時間
-                session = new WordleSession { 
-                    Guesses = [], 
+                session = new WordleSession
+                {
+                    Guesses = [],
                     HintUsed = false,
-                    HardMode = userSetting.HardMode 
+                    HardMode = userSetting.HardMode
                 };
             }
             else
@@ -599,52 +600,78 @@ namespace DiscordWordleBot.Interaction.Wordle
         {
             var myId = Context.User.Id;
             var targetId = user.Id;
-            if (myId == targetId)
-            {
-                await Context.Interaction.SendErrorAsync("不能偷看自己！");
-                return;
-            }
-            var mySessionJson = await _redis.StringGetAsync($"wordle:{myId}");
-            var targetSessionJson = await _redis.StringGetAsync($"wordle:{targetId}");
+
             var answer = _service.GetDailyAnswer();
             if (string.IsNullOrEmpty(answer))
             {
                 await Context.Interaction.SendErrorAsync("今日 Wordle 答案尚未設定，請稍後再試。");
                 return;
             }
+
+            var mySessionJson = await _redis.StringGetAsync($"wordle:{myId}");
             if (mySessionJson.IsNullOrEmpty)
             {
                 await Context.Interaction.SendErrorAsync("你必須完成今日遊戲才可偷看他人。");
                 return;
             }
+
             var mySession = JsonConvert.DeserializeObject<WordleSession>(mySessionJson!);
-            bool myDone = mySession.Guesses.Contains(answer) || mySession.Guesses.Count >= MaxGuesses;
-            if (!myDone)
+
+            // 如果是偷看自己，允許任何時候偷看
+            if (myId == targetId)
             {
-                await Context.Interaction.SendErrorAsync("你必須完成今日遊戲才可偷看他人。");
-                return;
+                try
+                {
+                    var imageBytes = DrawWordleImage(mySession.Guesses, answer, true, mySession);
+                    using var memoryStream = new MemoryStream(imageBytes);
+                    var embed = new EmbedBuilder()
+                        .WithColor(Discord.Color.Purple)
+                        .WithTitle($"{user.Username} 的猜題過程")
+                        .WithImageUrl("attachment://wordle_view.png")
+                        .WithFooter($"已猜 {mySession.Guesses.Count} 次" + (mySession.HardMode ? " | 困難模式" : ""));
+                    await Context.Interaction.RespondWithFileAsync(memoryStream, "wordle_view.png", embed: embed.Build(), ephemeral: true);
+                }
+                catch (Exception)
+                {
+                    string emojiGrid = BuildEmojiGrid(mySession.Guesses, answer, true, mySession);
+                    await Context.Interaction.SendConfirmAsync($"{user.Username} 的猜題過程\n\n{emojiGrid}", ephemeral: true);
+                }
             }
-            if (targetSessionJson.IsNullOrEmpty)
+            else
             {
-                await Context.Interaction.SendErrorAsync("對方今天還沒玩過 Wordle。");
-                return;
-            }
-            var targetSession = JsonConvert.DeserializeObject<WordleSession>(targetSessionJson!);
-            try
-            {
-                var imageBytes = DrawWordleImage(targetSession.Guesses, answer, true, targetSession);
-                using var memoryStream = new MemoryStream(imageBytes);
-                var embed = new EmbedBuilder()
-                    .WithColor(Discord.Color.Purple)
-                    .WithTitle($"{user.Username} 的猜題過程")
-                    .WithImageUrl("attachment://wordle_view.png")
-                    .WithFooter($"已猜 {targetSession.Guesses.Count} 次" + (targetSession.HardMode ? " | 困難模式" : ""));
-                await Context.Interaction.RespondWithFileAsync(memoryStream, "wordle_view.png", embed: embed.Build(), ephemeral: true);
-            }
-            catch (Exception)
-            {
-                string emojiGrid = BuildEmojiGrid(targetSession.Guesses, answer, true, targetSession);
-                await Context.Interaction.SendConfirmAsync($"{user.Username} 的猜題過程\n\n{emojiGrid}", ephemeral: true);
+                // 偷看他人時，必須完成今日遊戲
+                bool myDone = mySession.Guesses.Contains(answer) || mySession.Guesses.Count >= MaxGuesses;
+                if (!myDone)
+                {
+                    await Context.Interaction.SendErrorAsync("你必須完成今日遊戲才可偷看他人。");
+                    return;
+                }
+
+                var targetSessionJson = await _redis.StringGetAsync($"wordle:{targetId}");
+                if (targetSessionJson.IsNullOrEmpty)
+                {
+                    await Context.Interaction.SendErrorAsync("對方今天還沒玩過 Wordle。");
+                    return;
+                }
+
+                var targetSession = JsonConvert.DeserializeObject<WordleSession>(targetSessionJson!);
+
+                try
+                {
+                    var imageBytes = DrawWordleImage(targetSession.Guesses, answer, true, targetSession);
+                    using var memoryStream = new MemoryStream(imageBytes);
+                    var embed = new EmbedBuilder()
+                        .WithColor(Discord.Color.Purple)
+                        .WithTitle($"{user.Username} 的猜題過程")
+                        .WithImageUrl("attachment://wordle_view.png")
+                        .WithFooter($"已猜 {targetSession.Guesses.Count} 次" + (targetSession.HardMode ? " | 困難模式" : ""));
+                    await Context.Interaction.RespondWithFileAsync(memoryStream, "wordle_view.png", embed: embed.Build(), ephemeral: true);
+                }
+                catch (Exception)
+                {
+                    string emojiGrid = BuildEmojiGrid(targetSession.Guesses, answer, true, targetSession);
+                    await Context.Interaction.SendConfirmAsync($"{user.Username} 的猜題過程\n\n{emojiGrid}", ephemeral: true);
+                }
             }
         }
 
@@ -688,11 +715,12 @@ namespace DiscordWordleBot.Interaction.Wordle
             var setting = db.WordleUserSetting.FirstOrDefault(x => x.UserId == userId);
             if (setting == null)
             {
-                setting = new WordleUserSetting { 
-                    UserId = userId, 
-                    NightMode = night ?? false, 
-                    ColorBlindMode = colorBlind ?? false, 
-                    HardMode = hard ?? false 
+                setting = new WordleUserSetting
+                {
+                    UserId = userId,
+                    NightMode = night ?? false,
+                    ColorBlindMode = colorBlind ?? false,
+                    HardMode = hard ?? false
                 };
                 db.WordleUserSetting.Add(setting);
             }
