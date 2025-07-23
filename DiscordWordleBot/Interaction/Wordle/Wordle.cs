@@ -49,6 +49,8 @@ namespace DiscordWordleBot.Interaction.Wordle
         private static readonly int CellSize = 24;
         private static readonly int CellPadding = 4;
 
+        private enum LetterState { None, Gray, Yellow, Green }
+
         public Wordle()
         {
             _redis = RedisConnection.RedisDb;
@@ -274,7 +276,57 @@ namespace DiscordWordleBot.Interaction.Wordle
             }
         }
 
-        // 新增：將猜測結果轉為 emoji grid
+        // 標記每個字母的顏色（綠、黃、灰），完全符合官方 Wordle 重複字母規則
+        private static LetterState[] MarkGuess(string guess, string answer)
+        {
+            var result = new LetterState[5];
+            var answerChars = answer.ToCharArray();
+            var guessChars = guess.ToCharArray();
+            var answerCharCounts = new Dictionary<char, int>();
+            var greenCounts = new Dictionary<char, int>();
+
+            // 統計答案中每個字母的數量
+            foreach (var c in answerChars)
+            {
+                if (!answerCharCounts.ContainsKey(c)) answerCharCounts[c] = 0;
+                answerCharCounts[c]++;
+            }
+            // 1. 先標記綠色，並記錄每個字母已配對的綠色數量
+            for (int i = 0; i < 5; i++)
+            {
+                if (guessChars[i] == answerChars[i])
+                {
+                    result[i] = LetterState.Green;
+                    if (!greenCounts.ContainsKey(guessChars[i])) greenCounts[guessChars[i]] = 0;
+                    greenCounts[guessChars[i]]++;
+                }
+            }
+            // 2. 再標記黃色
+            var yellowCounts = new Dictionary<char, int>();
+            for (int i = 0; i < 5; i++)
+            {
+                if (result[i] == LetterState.Green) continue;
+                char c = guessChars[i];
+                int totalInAnswer = answerCharCounts.ContainsKey(c) ? answerCharCounts[c] : 0;
+                int greenUsed = greenCounts.ContainsKey(c) ? greenCounts[c] : 0;
+                int yellowUsed = yellowCounts.ContainsKey(c) ? yellowCounts[c] : 0;
+                // 黃色標記僅在答案剩餘次數內
+                int canBeYellow = totalInAnswer - greenUsed - yellowUsed;
+                if (canBeYellow > 0)
+                {
+                    result[i] = LetterState.Yellow;
+                    if (!yellowCounts.ContainsKey(c)) yellowCounts[c] = 0;
+                    yellowCounts[c]++;
+                }
+                else
+                {
+                    result[i] = LetterState.Gray;
+                }
+            }
+            return result;
+        }
+
+        // 修改 BuildEmojiGrid 以使用 MarkGuess
         private static string BuildEmojiGrid(List<string> guesses, string answer, bool showLetter = true, WordleSession? session = null)
         {
             // 根據 session 設定選擇 emoji
@@ -286,14 +338,15 @@ namespace DiscordWordleBot.Interaction.Wordle
             var result = new StringBuilder();
             foreach (var guess in guesses)
             {
+                var marks = MarkGuess(guess, answer);
                 for (int i = 0; i < 5; i++)
                 {
-                    if (guess[i] == answer[i])
-                        result.Append(greenEmoji);
-                    else if (answer.Contains(guess[i]))
-                        result.Append(yellowEmoji);
-                    else
-                        result.Append(grayEmoji);
+                    result.Append(marks[i] switch
+                    {
+                        LetterState.Green => greenEmoji,
+                        LetterState.Yellow => yellowEmoji,
+                        _ => grayEmoji
+                    });
                 }
                 if (showLetter)
                 {
@@ -306,35 +359,7 @@ namespace DiscordWordleBot.Interaction.Wordle
             return result.ToString();
         }
 
-        private enum LetterState { None, Gray, Yellow, Green }
-
-        // 取得每個字母的最高狀態（綠>黃>灰）
-        private static Dictionary<char, LetterState> GetKeyboardLetterStates(List<string> guesses, string answer)
-        {
-            var dict = new Dictionary<char, LetterState>();
-            foreach (var guess in guesses)
-            {
-                for (int i = 0; i < guess.Length; i++)
-                {
-                    char c = guess[i];
-                    if (!dict.TryGetValue(c, out var state)) state = LetterState.None;
-                    if (c == answer[i])
-                        dict[c] = LetterState.Green;
-                    else if (answer.Contains(c))
-                    {
-                        if (state != LetterState.Green)
-                            dict[c] = LetterState.Yellow;
-                    }
-                    else
-                    {
-                        if (state != LetterState.Green && state != LetterState.Yellow)
-                            dict[c] = LetterState.Gray;
-                    }
-                }
-            }
-            return dict;
-        }
-
+        // 修改 DrawWordleImage 內格子顏色標記邏輯，使用 MarkGuess
         private byte[] DrawWordleImage(List<string> guesses, string answer, bool isNeedDrawLatter = true, WordleSession? session = null, bool showKeyboard = true)
         {
             if (_font == null)
@@ -344,32 +369,14 @@ namespace DiscordWordleBot.Interaction.Wordle
             bool night = session?.NightMode ?? false;
             bool colorBlind = session?.ColorBlindMode ?? false;
 
-            SixLabors.ImageSharp.Color GetCellColor(char guessChar, char answerChar, string answerStr, int col)
+            SixLabors.ImageSharp.Color GetCellColor(LetterState state)
             {
-                if (colorBlind && night)
+                return state switch
                 {
-                    if (guessChar == answerChar) return NightColorBlindOrange;
-                    else if (answerStr.Contains(guessChar)) return NightColorBlindBlue;
-                    else return NightColorBlindGray;
-                }
-                else if (colorBlind)
-                {
-                    if (guessChar == answerChar) return ColorBlindOrange;
-                    else if (answerStr.Contains(guessChar)) return ColorBlindBlue;
-                    else return Gray;
-                }
-                else if (night)
-                {
-                    if (guessChar == answerChar) return NightGreen;
-                    else if (answerStr.Contains(guessChar)) return NightYellow;
-                    else return NightGray;
-                }
-                else
-                {
-                    if (guessChar == answerChar) return Green;
-                    else if (answerStr.Contains(guessChar)) return Yellow;
-                    else return Gray;
-                }
+                    LetterState.Green => colorBlind && night ? NightColorBlindOrange : colorBlind ? ColorBlindOrange : night ? NightGreen : Green,
+                    LetterState.Yellow => colorBlind && night ? NightColorBlindBlue : colorBlind ? ColorBlindBlue : night ? NightYellow : Yellow,
+                    _ => colorBlind && night ? NightColorBlindGray : colorBlind ? Gray : night ? NightGray : Gray
+                };
             }
 
             // 鍵盤字母排列
@@ -398,11 +405,12 @@ namespace DiscordWordleBot.Interaction.Wordle
                 for (int row = 0; row < rows; row++)
                 {
                     var guess = guesses[row];
+                    var marks = MarkGuess(guess, answer);
                     for (int col = 0; col < 5; col++)
                     {
                         int x = gridStartX + col * (CellSize + CellPadding);
                         int y = row * (CellSize + CellPadding);
-                        var color = GetCellColor(guess[col], answer[col], answer, col);
+                        var color = GetCellColor(marks[col]);
                         var rect = new Rectangle(x, y, CellSize, CellSize);
                         image.Mutate(ctx => ctx.Fill(Brushes.Solid(color), rect));
                         // Draw letter
@@ -700,15 +708,23 @@ namespace DiscordWordleBot.Interaction.Wordle
         // 取得使用者的 Wordle 模式設定
         private static WordleUserSetting GetUserSetting(ulong userId)
         {
-            using var db = MainDbContext.GetDbContext();
-            var setting = db.WordleUserSetting.FirstOrDefault(x => x.UserId == userId);
-            if (setting == null)
+            try
             {
-                setting = new WordleUserSetting { UserId = userId, NightMode = false, ColorBlindMode = false, HardMode = false };
-                db.WordleUserSetting.Add(setting);
-                db.SaveChanges();
+                using var db = MainDbContext.GetDbContext();
+                var setting = db.WordleUserSetting.FirstOrDefault(x => x.UserId == userId);
+                if (setting == null)
+                {
+                    setting = new WordleUserSetting { UserId = userId, NightMode = false, ColorBlindMode = false, HardMode = false };
+                    db.WordleUserSetting.Add(setting);
+                    db.SaveChanges();
+                }
+                return setting;
             }
-            return setting;
+            catch (Exception ex)
+            {
+                Log.Error(ex, $"Get user setting error: {userId}");
+                throw;
+            }
         }
 
         // 更新使用者的 Wordle 模式設定
@@ -734,6 +750,34 @@ namespace DiscordWordleBot.Interaction.Wordle
                 if (hard.HasValue) setting.HardMode = hard.Value;
             }
             db.SaveChanges();
+        }
+
+        // 取得每個字母的最高狀態（綠>黃>灰）
+        private static Dictionary<char, LetterState> GetKeyboardLetterStates(List<string> guesses, string answer)
+        {
+            var dict = new Dictionary<char, LetterState>();
+            foreach (var guess in guesses)
+            {
+                var marks = MarkGuess(guess, answer);
+                for (int i = 0; i < guess.Length; i++)
+                {
+                    char c = guess[i];
+                    if (!dict.TryGetValue(c, out var state)) state = LetterState.None;
+                    if (marks[i] == LetterState.Green)
+                        dict[c] = LetterState.Green;
+                    else if (marks[i] == LetterState.Yellow)
+                    {
+                        if (state != LetterState.Green)
+                            dict[c] = LetterState.Yellow;
+                    }
+                    else if (marks[i] == LetterState.Gray)
+                    {
+                        if (state != LetterState.Green && state != LetterState.Yellow)
+                            dict[c] = LetterState.Gray;
+                    }
+                }
+            }
+            return dict;
         }
     }
 }
