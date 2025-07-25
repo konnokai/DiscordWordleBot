@@ -121,18 +121,18 @@ namespace DiscordWordleBot.Interaction.Wordle
                 return;
             }
 
-            if (!_service.GetAnswers().Contains(word))
-            {
-                await Context.Interaction.SendErrorAsync("不是合法的 Wordle 單字。");
-                return;
-            }
-
             var userId = Context.User.Id;
             var sessionJson = await _redis.StringGetAsync($"wordle:{userId}");
             var answer = _service.GetDailyAnswer();
             if (string.IsNullOrEmpty(answer))
             {
                 await Context.Interaction.SendErrorAsync("今日 Wordle 答案尚未設定，請稍後再試。");
+                return;
+            }
+
+            if (!_service.IsValidWord(word) && word != answer)
+            {
+                await Context.Interaction.SendErrorAsync("不是合法的 Wordle 單字。");
                 return;
             }
 

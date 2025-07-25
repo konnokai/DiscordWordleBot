@@ -10,12 +10,14 @@ namespace DiscordWordleBot.Interaction.Wordle
         private static string _dailyAnswer = null;
         private readonly IDatabase _redis;
         private readonly List<string> _answers;
+        private readonly HashSet<string> _validWords;
 
         public WordleService()
         {
             _redis = RedisConnection.RedisDb;
 
             _answers = LoadAnswers();
+            _validWords = LoadValidWords();
             if (_answers.Count == 0)
             {
                 Log.Error("Wordle 答案為空，請檢查 WordleAnswers.txt 資料的正確性");
@@ -27,6 +29,11 @@ namespace DiscordWordleBot.Interaction.Wordle
         public List<string> GetAnswers()
         {
             return _answers;
+        }
+
+        public bool IsValidWord(string word)
+        {
+            return _validWords.Contains(word);
         }
 
         private static TimeSpan GetExpireTimeSpan()
@@ -62,7 +69,7 @@ namespace DiscordWordleBot.Interaction.Wordle
             dailyWordleTimer = new Timer(_ =>
             {
                 SetDailyWordleAnswer();
-            }, null, GetExpireTimeSpan().Add(TimeSpan.FromSeconds(3)), TimeSpan.FromDays(1));
+            }, null, GetExpireTimeSpan(), TimeSpan.FromDays(1));
         }
 
         private void SetDailyWordleAnswer()
@@ -114,6 +121,25 @@ namespace DiscordWordleBot.Interaction.Wordle
             }
 
             return null;
+        }
+
+        private HashSet<string> LoadValidWords()
+        {
+            try
+            {
+                var path = DiscordWordleBot.Utility.GetDataFilePath("ValidWordleWords.txt");
+                if (!File.Exists(path))
+                    return [];
+                return [.. File.ReadAllLines(path)
+                    .Select(x => x.Trim().ToLowerInvariant())
+                    .Where(x => x.Length == 5)
+                    .Distinct()];
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex.Demystify(), "[Wordle] Load valid words failed");
+                return [];
+            }
         }
     }
 }
