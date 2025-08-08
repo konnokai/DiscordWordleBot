@@ -69,7 +69,7 @@ namespace DiscordWordleBot.Interaction.Wordle
             dailyWordleTimer = new Timer(_ =>
             {
                 SetDailyWordleAnswer();
-            }, null, GetExpireTimeSpan(), TimeSpan.FromDays(1));
+            }, null, GetExpireTimeSpan() + TimeSpan.FromSeconds(3), TimeSpan.FromDays(1));
         }
 
         private void SetDailyWordleAnswer()
